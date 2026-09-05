@@ -77,3 +77,7 @@
 ## 2024-11-20 - Optimize multiple tuple generation from a single collection
 **Learning:** `build_rule_metadata` derives exactly two collections, `owasp` and `cwe`, from the same references. Replacing its two generator traversals with one explicit loop reduces element visits from about 2N to N. Both versions remain O(N), so this is a constant-factor optimization rather than an asymptotic complexity improvement.
 **Action:** Combine repeated traversal when fixed derived collections share one source, while preserving ordering and classification semantics. Benchmark the production hot path before claiming a material wall-clock improvement.
+
+## 2025-01-08 - Array filtering and mapping optimizations
+**Learning:** JavaScript에서 배열 메서드 체이닝(`.map().filter().sort()`)은 대규모 데이터셋 처리 시 불필요한 중간 배열 생성 및 다중 순회로 인해 상당한 오버헤드를 유발합니다. 또한 정렬 우선순위 비교에서 `indexOf`(O(N))를 사용할 경우 비용이 더욱 커집니다.
+**Action:** 체이닝된 다중 배열 순회를 단일 `for` 루프와 조기 반환(`early return`)으로 변경하여 순회 횟수를 줄입니다. 정렬 우선순위 식별에는 `indexOf` 대신 O(1) 조회가 가능한 객체(Object map)를 활용하며, 원래의 `indexOf`처럼 알 수 없는 키에 대해서는 `-1`을 반환하도록 fallback 로직을 구현합니다.

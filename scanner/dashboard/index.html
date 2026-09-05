@@ -106,7 +106,8 @@ const SEV = {
   WARNING:{color:'var(--warn)'}, INFO:{color:'var(--info)'}
 };
 const SEV_ORDER = ['CRITICAL','HIGH','WARNING','INFO'];
-const SEV_ORDER_MAP = Object.fromEntries(SEV_ORDER.map((s, i) => [s, i]));
+const SEV_ORDER_MAP = {};
+for (let i = 0; i < SEV_ORDER.length; i++) { SEV_ORDER_MAP[SEV_ORDER[i]] = i; }
 const NON_BLOCKING = new Set(['doc','test','example','scanner-fixture']);
 const BLOCKING_SEV = new Set(['CRITICAL','HIGH']);
 
@@ -200,7 +201,7 @@ function render(){
     if (query && !(String(f.message) + ' ' + String(f.file) + ' ' + String(f.rule_id) + ' ' + String(f.category)).toLowerCase().includes(query)) continue;
     filtered.push({f, i, s});
   }
-  filtered.sort((a, b) => (SEV_ORDER_MAP[a.s] ?? 99) - (SEV_ORDER_MAP[b.s] ?? 99));
+  filtered.sort((a, b) => (SEV_ORDER_MAP[a.s] !== undefined ? SEV_ORDER_MAP[a.s] : -1) - (SEV_ORDER_MAP[b.s] !== undefined ? SEV_ORDER_MAP[b.s] : -1));
   const allFindingsText = formatFindingCount(ALL.length);
   const findingsText = filtered.length === ALL.length
     ? allFindingsText
