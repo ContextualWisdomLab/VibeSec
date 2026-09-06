@@ -17,7 +17,7 @@ def test_console_xss_scan_id_survives_roundtrip(page) -> None:
     malicious_count = '<img src=x onerror=alert(2)>'
 
     # Mock window.fetch manually as page.route has issues with file:// fetch interception
-    payload = f'{{"scans": [{{"id": {repr(malicious_id)}, "created_at": "2024-01-01", "deploy_blocking": {repr(malicious_count)}, "new_blocking": {repr(malicious_count)}, "total": {repr(malicious_count)}, "severity_counts": {{"CRITICAL": {repr(malicious_count)}}}}}]}}'
+    payload = f'{{"scans": [{{"id": {repr(malicious_id)}, "created_at": {repr(malicious_count)}, "repo": {repr(malicious_count)}, "deploy_blocking": {repr(malicious_count)}, "new_blocking": {repr(malicious_count)}, "total": {repr(malicious_count)}, "severity_counts": {{"CRITICAL": {repr(malicious_count)}}}}}]}}'
     mock_fetch = f"""
     window.fetch = async (url) => {{
         return {{
