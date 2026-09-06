@@ -198,7 +198,7 @@ function render(){
   const filtered = [];
   for (let i = 0; i < ALL.length; i++) {
     const f = ALL[i];
-    const sev = String(f.severity || 'INFO').toUpperCase();
+    const sev = String(f.severity).toUpperCase();
     if (filterSev && sev !== filterSev) continue; // 조기 반환 (early return)
     if (query) {
       const searchStr = (String(f.message) + ' ' + String(f.file) + ' ' + String(f.rule_id) + ' ' + String(f.category)).toLowerCase();
@@ -208,8 +208,8 @@ function render(){
   }
   filtered.sort((a, b) => {
     // indexOf 대신 O(1) 맵 탐색을 사용하여 정렬 속도를 높임
-    const orderA = SEV_ORDER_MAP[String(a.f.severity || 'INFO').toUpperCase()] ?? -1;
-    const orderB = SEV_ORDER_MAP[String(b.f.severity || 'INFO').toUpperCase()] ?? -1;
+    const orderA = SEV_ORDER_MAP[String(a.f.severity).toUpperCase()] ?? -1;
+    const orderB = SEV_ORDER_MAP[String(b.f.severity).toUpperCase()] ?? -1;
     return orderA - orderB;
   });
   const allFindingsText = formatFindingCount(ALL.length);
