@@ -107,8 +107,7 @@ class RuleMetadata:
 def extract_public_references(message: str) -> tuple[str, ...]:
     """Extract OWASP, CWE, and CVE references already embedded in rule copy."""
     # ⚡ Bolt: Fast-path string pre-filter. Most finding messages don't contain
-    # public references. Checking for "[" avoids invoking the regex engine
-    # (~15x speedup for reference-less messages).
+    # public references. Checking for "[" avoids invoking the regex engine.
     if not message or "[" not in message:
         return ()
     return tuple(
