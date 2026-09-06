@@ -81,7 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-
-## 2024-05-24 - Proxy File Input Button UX Enhancement
-**Learning:** Browsers natively suppress `change` events on `<input type="file">` if the user selects the same file path sequentially. Additionally, styling native file inputs is notoriously difficult and visually inconsistent across browsers.
-**Action:** Visually hide the native input using the `hidden` attribute and trigger it using a styled proxy `<button>` with an explicit `addEventListener`. In the input's `change` event listener, capture the file, immediately clear the input value (`fileInput.value = ''`), and process it. This ensures visual consistency and reliable same-file re-selection without functional regressions.
