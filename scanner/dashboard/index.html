@@ -191,11 +191,27 @@ function render(){
   const catRows = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,n])=>
     `<div class="r"><span class="name">${esc(c)}</span><span class="cnt">${n}</span></div>`).join('');
 
-  const filtered = ALL
-    .map((f,i)=>({f,i}))
-    .filter(({f})=> (!filterSev || String(f.severity).toUpperCase()===filterSev))
-    .filter(({f})=> !query || (String(f.message)+' '+String(f.file)+' '+String(f.rule_id)+' '+String(f.category)).toLowerCase().includes(query))
-    .sort((a,b)=> SEV_ORDER.indexOf(String(a.f.severity).toUpperCase()) - SEV_ORDER.indexOf(String(b.f.severity).toUpperCase()));
+  // ⚡ Bolt 최적화: 고빈도 이벤트(검색어 입력)에서 성능을 높이기 위해
+  // 다중 배열 메서드 체인(.map.filter.filter.sort)을 단일 for 루프와 O(1) 객체 탐색으로 대체했습니다.
+  // 이로 인해 메모리 할당 및 다중 순회가 방지되어 렌더링 성능이 향상됩니다.
+  const SEV_ORDER_MAP = Object.fromEntries(SEV_ORDER.map((s, i) => [s, i]));
+  const filtered = [];
+  for (let i = 0; i < ALL.length; i++) {
+    const f = ALL[i];
+    const sev = String(f.severity).toUpperCase();
+    if (filterSev && sev !== filterSev) continue; // 조기 반환 (early return)
+    if (query) {
+      const searchStr = (String(f.message) + ' ' + String(f.file) + ' ' + String(f.rule_id) + ' ' + String(f.category)).toLowerCase();
+      if (!searchStr.includes(query)) continue;
+    }
+    filtered.push({f, i});
+  }
+  filtered.sort((a, b) => {
+    // indexOf 대신 O(1) 맵 탐색을 사용하여 정렬 속도를 높임
+    const orderA = SEV_ORDER_MAP[String(a.f.severity).toUpperCase()] ?? -1;
+    const orderB = SEV_ORDER_MAP[String(b.f.severity).toUpperCase()] ?? -1;
+    return orderA - orderB;
+  });
   const allFindingsText = formatFindingCount(ALL.length);
   const findingsText = filtered.length === ALL.length
     ? allFindingsText

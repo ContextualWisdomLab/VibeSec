@@ -302,3 +302,15 @@ def test_dashboard_search_escape_clears_input():
     assert "e.key === 'Escape'" in html
     assert "query = '';" in html
     assert "render();" in html
+
+
+def test_dashboard_unknown_severity_preserves_legacy_sort_precedence():
+    """Unknown severities retain the pre-refactor sort position ahead of known levels."""
+    html = dashboard_index_path().read_text(encoding="utf-8")
+    comparator = re.search(
+        r"filtered\.sort\(\(a, b\) => \{(?P<body>.*?)\n  \}\);",
+        html,
+        flags=re.DOTALL,
+    )
+    assert comparator is not None
+    assert comparator.group("body").count("?? -1") == 2
