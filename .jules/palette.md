@@ -81,3 +81,6 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+## 2026-09-05 - Proxy Button for Native File Input
+**Learning:** Native file inputs have poor UX and can't be fully styled. Wrapping them with a styled proxy button and hiding the native input improves visual consistency and accessibility, provided the proxy button has visible text (label-in-name principle) and is connected via an explicit event listener.
+**Action:** Use a hidden native input triggered by a proxy button with visible text for file uploads.
