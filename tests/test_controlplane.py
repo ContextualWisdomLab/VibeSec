@@ -272,6 +272,16 @@ def test_api_set_webhook_ssrf_protection(server):
         _req("POST", f"{base}/api/v1/webhook", key, {"url": "http://127.0.0.1/hook"})
     assert exc.value.code == 400
     assert json.loads(exc.value.read())["error"] == "invalid webhook url"
+    # Empty host SSRF attempt
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _req("POST", f"{base}/api/v1/webhook", key, {"url": "http://"})
+    assert exc.value.code == 400
+    assert json.loads(exc.value.read())["error"] == "invalid webhook url"
+    # Empty host with credentials SSRF attempt
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _req("POST", f"{base}/api/v1/webhook", key, {"url": "http://user@"})
+    assert exc.value.code == 400
+    assert json.loads(exc.value.read())["error"] == "invalid webhook url"
 
 
 def test_roles_and_key_scoping():
