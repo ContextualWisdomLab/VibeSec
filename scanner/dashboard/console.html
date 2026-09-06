@@ -121,9 +121,9 @@ async function load(){
     const latest=scans[0]||{severity_counts:{}};
     const c=latest.severity_counts||{};
     $("#stats").innerHTML=[
-      ["Latest deploy-blocking",latest.deploy_blocking||0],
-      ["New since last scan",latest.new_blocking||0],
-      ["Critical",c.CRITICAL||0],
+      ["Latest deploy-blocking",Number(latest.deploy_blocking)||0],
+      ["New since last scan",Number(latest.new_blocking)||0],
+      ["Critical",Number(c.CRITICAL)||0],
       ["Scans stored",scans.length],
     ].map(([l,n])=>`<div class="stat"><div class="l">${l}</div><div class="n">${n}</div></div>`).join("");
     const ord=[...scans].reverse();
@@ -131,9 +131,9 @@ async function load(){
     $("#trend").innerHTML=ord.map(s=>{const h=Math.round(6+((s.deploy_blocking||0)/max)*54);
       const col=(s.deploy_blocking||0)>0?"var(--crit)":"var(--ok)";
       return `<div class="bar" tabindex="0" role="img" aria-label="${esc(s.created_at)}: ${esc(String(s.deploy_blocking||0))} blocking" title="${esc(s.created_at)}: ${esc(String(s.deploy_blocking||0))} blocking" style="height:${h}px;background:${col}"></div>`;}).join("")||'<span class="muted">No scans yet.</span>';
-    $("#history tbody").innerHTML=scans.map(s=>`<tr class="scan" data-id="${s.id}" tabindex="0" role="button" title="View scan details">
+    $("#history tbody").innerHTML=scans.map(s=>`<tr class="scan" data-id="${esc(s.id)}" tabindex="0" role="button" title="View scan details">
       <td>${esc(s.created_at)}</td><td>${esc(s.repo||"—")}</td><td><code>${esc((s.commit||"—").slice(0,10))}</code></td>
-      <td>${s.total}</td><td>${pill(s.deploy_blocking,"var(--crit)")}</td><td>${pill(s.new_blocking,"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
+      <td>${Number(s.total)}</td><td>${pill(Number(s.deploy_blocking),"var(--crit)")}</td><td>${pill(Number(s.new_blocking),"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
     document.querySelectorAll("tr.scan").forEach(tr=>{
       tr.onclick=()=>detail(tr.dataset.id,tr);
       tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); detail(tr.dataset.id,tr); } });
