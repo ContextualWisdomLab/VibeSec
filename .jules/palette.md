@@ -84,3 +84,6 @@
 ## 2024-09-06 - Scoping Issues in Inline Event Handlers
 **Learning:** When adding event handlers like `onclick` directly in HTML strings without a build step or framework, top-level variables declared with `let` are not bound to the global `window` object. Attempting to toggle them via `window.variable = !window.variable` fails silently and does not modify the intended variable.
 **Action:** When working with inline event handlers in vanilla JavaScript applications, directly reference and mutate variables defined in the same script scope without prefixing them with `window.`, ensuring they actually reflect the updated state.
+## 2024-09-06 - Interactive Element Composition and Focus Retention Constraints
+**Learning:** Adding `div[role=button][tabindex=0]` and inline `onkeydown` manual implementations rather than a native `<button type="button">` re-implements native semantics unnecessarily, and when the element is replaced entirely via `render()`, keyboard focus retention is lost, damaging the accessible flow.
+**Action:** Always favor native `<button type="button">` over manual ARIA roles where possible within the component layout. For any components that are dynamically re-rendered completely on interaction, explicitly preserve and restore the active element focus.

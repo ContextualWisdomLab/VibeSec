@@ -92,10 +92,6 @@ def test_dashboard_severity_cards_are_accessible_filter_toggles():
     assert 'aria-pressed="${isSelected}"' in html
     assert "document.getElementById('sev').value='${isSelected ? '' : s}'" in html
     assert "dispatchEvent(new Event('change'))" in html
-    assert (
-        'onkeydown="if(event.key===\'Enter\'||event.key===\' \')'
-        '{event.preventDefault(); this.click();}"' in html
-    )
 
 
 def test_dashboard_escapes_severity_in_innerhtml():

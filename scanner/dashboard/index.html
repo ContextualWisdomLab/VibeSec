@@ -183,10 +183,10 @@ function render(){
     const isSelected = filterSev === s;
     const style = isSelected ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;';
     return `
-    <div class="card" role="button" tabindex="0" aria-label="Filter by ${s}: ${counts[s]}" aria-pressed="${isSelected}" onclick="document.getElementById('sev').value='${isSelected ? '' : s}'; document.getElementById('sev').dispatchEvent(new Event('change'));" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); this.click();}" style="${style}">
+    <button type="button" class="card" id="sev-filter-${s}" aria-label="Filter by ${s}: ${counts[s]}" aria-pressed="${isSelected}" onclick="document.getElementById('sev').value='${isSelected ? '' : s}'; document.getElementById('sev').dispatchEvent(new Event('change'));" style="border:1px solid var(--border); text-align:left; font:inherit; ${style}">
       <div class="lbl"><span class="dot" style="background:${SEV[s].color}"></span>${s}</div>
       <div class="n">${counts[s]}</div>
-    </div>`;
+    </button>`;
   }).join('');
   const catRows = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,n])=>
     `<div class="r"><span class="name">${esc(c)}</span><span class="cnt">${n}</span></div>`).join('');
@@ -220,9 +220,9 @@ function render(){
     <h1>Dashboard</h1>
     <p class="sub">${findingsText} · <strong>${blocking}</strong> deploy-blocking (gate ${blocking?'active':'clear'})</p>
     <div class="cards">${cards}
-      <div class="card" role="button" tabindex="0" aria-label="Filter by Deploy-blocking: ${blocking}" aria-pressed="${filterBlock}" onclick="filterBlock=!filterBlock;render();" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); this.click();}" style="${filterBlock ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;'}">
+      <button type="button" class="card" id="deploy-block-filter" aria-label="Filter by Deploy-blocking: ${blocking}" aria-pressed="${filterBlock}" onclick="filterBlock=!filterBlock;render();" style="border:none; text-align:left; font:inherit; ${filterBlock ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;'}">
         <div class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</div><div class="n">${blocking}</div>
-      </div>
+      </button>
     </div>
     <div class="grid2">
       <div class="panel"><h2>Findings by category</h2><div class="rowlist">${catRows||'<div class="r">—</div>'}</div></div>
