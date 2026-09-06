@@ -106,10 +106,14 @@ class RuleMetadata:
 
 def extract_public_references(message: str) -> tuple[str, ...]:
     """Extract OWASP, CWE, and CVE references already embedded in rule copy."""
+    # ⚡ Bolt: Fast-path string pre-filter. Most finding messages don't contain
+    # public references. Checking for "[" avoids invoking the regex engine.
+    if not message or "[" not in message:
+        return ()
     return tuple(
         dict.fromkeys(
             " ".join(match.group(1).split())
-            for match in REFERENCE_RE.finditer(message or "")
+            for match in REFERENCE_RE.finditer(message)
         )
     )
 
@@ -142,7 +146,9 @@ def build_rule_metadata(
     for ref in references:
         if ref.startswith("OWASP "):
             owasp_list.append(ref)
-        if ref.startswith("CWE-"):
+        # ⚡ Bolt: Use elif instead of if. A reference string cannot start with
+        # both 'OWASP ' and 'CWE-'. This avoids an unnecessary string check.
+        elif ref.startswith("CWE-"):
             cwe_list.append(ref)
 
     return RuleMetadata(
