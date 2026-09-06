@@ -8,6 +8,46 @@ CONSOLE_PATH = (
 )
 
 
+def test_console_xss_scan_id_survives_roundtrip(page) -> None:
+    """A realistic DOM regression using an attacker-controlled scan id that attempts to break out of data-id."""
+    html = CONSOLE_PATH.read_text(encoding="utf-8")
+
+    # Mock the API responses
+    # Use a malicious scan ID with quotes, angle brackets, and unicode
+    malicious_id = '123"><img src=x onerror=alert(1)>🐉'
+
+    # Mock window.fetch manually as page.route has issues with file:// fetch interception
+    payload = f'{{"scans": [{{"id": {repr(malicious_id)}, "created_at": "2024-01-01", "deploy_blocking": 0, "new_blocking": 0, "total": 0}}]}}'
+    mock_fetch = f"""
+    window.fetch = async (url) => {{
+        return {{
+            ok: true,
+            status: 200,
+            json: async () => ({payload})
+        }};
+    }};
+    """
+
+    # Listen for alerts to ensure XSS doesn't trigger
+    alert_triggered = []
+    page.on("dialog", lambda dialog: alert_triggered.append(dialog.message))
+
+    # Initialize the dashboard
+    page.goto(f"file://{CONSOLE_PATH}")
+    page.add_init_script(mock_fetch)
+    page.evaluate(mock_fetch)
+    page.evaluate('sessionStorage.setItem("ag_key", "test-key");')
+    page.evaluate('load()')
+    page.wait_for_selector("tr.scan")
+
+    # The scan row should be rendered. Verify `dataset.id` securely survived the roundtrip
+    scan_row = page.locator("tr.scan")
+    dataset_id = scan_row.evaluate("el => el.dataset.id")
+
+    assert dataset_id == malicious_id
+    assert len(alert_triggered) == 0
+
+
 def test_trend_accessibility_attributes_escape_blocking_count() -> None:
     """Untrusted scan counts must not escape innerHTML attribute values."""
     html = CONSOLE_PATH.read_text(encoding="utf-8")
