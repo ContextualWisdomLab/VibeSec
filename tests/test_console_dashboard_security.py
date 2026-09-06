@@ -44,6 +44,7 @@ def test_console_xss_scan_id_survives_roundtrip(page) -> None:
     dataset_id = scan_row.evaluate("el => el.dataset.id")
 
     assert dataset_id == malicious_id
+    assert page.locator("img").count() == 0
     assert len(alert_triggered) == 0
 
 
