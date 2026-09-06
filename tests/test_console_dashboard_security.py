@@ -51,8 +51,8 @@ def test_console_xss_scan_id_survives_roundtrip(page) -> None:
 def test_trend_accessibility_attributes_escape_blocking_count() -> None:
     """Untrusted scan counts must not escape innerHTML attribute values."""
     html = CONSOLE_PATH.read_text(encoding="utf-8")
-    trend_template = html.split('$("trend").innerHTML=', 1)[1].split(
-        '$("history tbody").innerHTML=', 1
+    trend_template = html.split('$("#trend").innerHTML=', 1)[1].split(
+        '$("#history tbody").innerHTML=', 1
     )[0]
 
     assert "${s.deploy_blocking||0}" not in trend_template
