@@ -14,9 +14,10 @@ def test_console_xss_scan_id_survives_roundtrip(page) -> None:
     # Mock the API responses
     # Use a malicious scan ID with quotes, angle brackets, and unicode
     malicious_id = '123"><img src=x onerror=alert(1)>🐉'
+    malicious_count = '<img src=x onerror=alert(2)>'
 
     # Mock window.fetch manually as page.route has issues with file:// fetch interception
-    payload = f'{{"scans": [{{"id": {repr(malicious_id)}, "created_at": "2024-01-01", "deploy_blocking": 0, "new_blocking": 0, "total": 0}}]}}'
+    payload = f'{{"scans": [{{"id": {repr(malicious_id)}, "created_at": "2024-01-01", "deploy_blocking": {repr(malicious_count)}, "new_blocking": {repr(malicious_count)}, "total": {repr(malicious_count)}, "severity_counts": {{"CRITICAL": {repr(malicious_count)}}}}}]}}'
     mock_fetch = f"""
     window.fetch = async (url) => {{
         return {{
