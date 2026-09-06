@@ -121,9 +121,9 @@ async function load(){
     const latest=scans[0]||{severity_counts:{}};
     const c=latest.severity_counts||{};
     $("#stats").innerHTML=[
-      ["Latest deploy-blocking",latest.deploy_blocking||0],
-      ["New since last scan",latest.new_blocking||0],
-      ["Critical",c.CRITICAL||0],
+      ["Latest deploy-blocking",Number(latest.deploy_blocking)||0],
+      ["New since last scan",Number(latest.new_blocking)||0],
+      ["Critical",Number(c.CRITICAL)||0],
       ["Scans stored",scans.length],
     ].map(([l,n])=>`<div class="stat"><div class="l">${l}</div><div class="n">${n}</div></div>`).join("");
     const ord=[...scans].reverse();
