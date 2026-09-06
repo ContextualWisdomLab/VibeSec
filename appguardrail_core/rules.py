@@ -91,7 +91,6 @@ class RuleMetadata:
     remediation: str
 
     def as_dict(self) -> dict[str, Any]:
-        """Return the stable report-facing metadata mapping."""
         return {
             "rule_id": self.rule_id,
             "severity": self.severity,
@@ -173,7 +172,6 @@ def validate_rule_metadata(metadata: RuleMetadata | dict[str, Any]) -> list[str]
 
 
 def _merge_references(*groups: tuple[str, ...]) -> tuple[str, ...]:
-    """Merge non-empty reference groups while preserving first-seen order."""
     seen = {}
     for group in groups:
         for reference in group:
