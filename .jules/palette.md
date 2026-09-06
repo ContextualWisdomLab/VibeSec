@@ -81,3 +81,6 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+## 2024-09-06 - Scoping Issues in Inline Event Handlers
+**Learning:** When adding event handlers like `onclick` directly in HTML strings without a build step or framework, top-level variables declared with `let` are not bound to the global `window` object. Attempting to toggle them via `window.variable = !window.variable` fails silently and does not modify the intended variable.
+**Action:** When working with inline event handlers in vanilla JavaScript applications, directly reference and mutate variables defined in the same script scope without prefixing them with `window.`, ensuring they actually reflect the updated state.
