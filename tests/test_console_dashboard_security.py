@@ -10,7 +10,6 @@ CONSOLE_PATH = (
 
 def test_console_xss_scan_id_survives_roundtrip(page) -> None:
     """A realistic DOM regression using an attacker-controlled scan id that attempts to break out of data-id."""
-    html = CONSOLE_PATH.read_text(encoding="utf-8")
 
     # Mock the API responses
     # Use a malicious scan ID with quotes, angle brackets, and unicode
