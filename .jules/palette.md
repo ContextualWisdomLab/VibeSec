@@ -81,3 +81,7 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+
+## 2026-08-23 - Async Interactive Element Interactions
+**Learning:** Adding `aria-busy="true"` explicitly communicates loading states to screen readers, but it does not natively prevent clicks, unlike the `disabled` attribute. During async operations (like loading scan details), users might double-click an interactive element that lacks `pointer-events: none`, causing duplicate API requests or unexpected state bugs.
+**Action:** Always map the `[aria-busy="true"]` state directly to CSS with `pointer-events: none` and visual indicators (like `opacity`) to ensure visual parity with the accessibility tree and prevent duplicate user actions.
