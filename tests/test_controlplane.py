@@ -1,6 +1,7 @@
 """Tests for the multi-tenant control-plane store + API."""
 
 import json
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -226,9 +227,9 @@ def test_no_webhook_no_alert(monkeypatch):
 def test_api_set_webhook(server):
     base, key = server
     status, body = _req(
-        "POST", f"{base}/api/v1/webhook", key, {"url": "http://hook.example/y"}
+        "POST", f"{base}/api/v1/webhook", key, {"url": "http://8.8.8.8/y"}
     )
-    assert status == 200 and body["webhook_url"] == "http://hook.example/y"
+    assert status == 200 and body["webhook_url"] == "http://8.8.8.8/y"
 
 
 def test_api_empty_webhook_body_rejected(server):
@@ -236,7 +237,7 @@ def test_api_empty_webhook_body_rejected(server):
     from urllib.parse import urlparse as _u
 
     base, key = server
-    _req("POST", f"{base}/api/v1/webhook", key, {"url": "http://hook.example/y"})
+    _req("POST", f"{base}/api/v1/webhook", key, {"url": "http://8.8.8.8/y"})
 
     parsed = _u(base)
     conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
@@ -316,7 +317,8 @@ def test_api_role_enforcement(server):
     assert e.value.code == 403
     # owner: all yes
     assert (
-        _req("POST", f"{base}/api/v1/webhook", owner_key, {"url": "http://x"})[0] == 200
+        _req("POST", f"{base}/api/v1/webhook", owner_key, {"url": "http://8.8.8.8/x"})[0]
+        == 200
     )
 
 
@@ -404,6 +406,14 @@ def test_slack_blocks_caps_and_escapes():
 
 def test_send_alert_slack_vs_generic(monkeypatch):
     posted = {}
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 443))
+        ],
+    )
 
     def _fake_build_opener(*handlers):
         assert any(type(h).__name__ == "SafeRedirectHandler" for h in handlers)

@@ -1,3 +1,4 @@
+import socket
 import urllib.error
 import urllib.request
 
@@ -10,6 +11,7 @@ from scanner.cli.appguardrail import _is_safe_url as _cli_is_safe_url
 def test_is_safe_url_public_domains():
     assert _is_safe_url("http://google.com/")
     assert _is_safe_url("https://github.com/")
+
 
 @pytest.mark.parametrize(
     "validator",
@@ -64,9 +66,13 @@ def test_is_safe_url_unsupported_schemes():
     assert not _is_safe_url("gopher://example.com")
 
 
-def test_is_safe_url_unresolvable_domain():
-    # An unresolvable domain is considered safe by _is_safe_url
-    assert _is_safe_url("http://this-domain-should-not-exist-12345.com/")
+def test_is_safe_url_unresolvable_domain_fails_closed(monkeypatch):
+    def _fail_resolution(*_args, **_kwargs):
+        raise socket.gaierror("synthetic unresolved host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fail_resolution)
+
+    assert not _is_safe_url("https://unresolved.example/hook")
 
 
 def test_is_safe_url_mapped_ips():
@@ -86,10 +92,7 @@ def test_push_findings_unsafe_url_handled_properly(monkeypatch, capsys):
 
     _push_findings("http://127.0.0.1/", [])
     captured = capsys.readouterr()
-    assert (
-        "URL must be a public HTTPS URL"
-        in captured.err
-    )
+    assert "URL must be a public HTTPS URL" in captured.err
 
 
 def test_safe_redirect_handler_rejects_internal_target():
@@ -116,6 +119,13 @@ def test_safe_redirect_handler_allows_public_https(monkeypatch):
         return sentinel
 
     monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 443))
+        ],
+    )
+    monkeypatch.setattr(
         urllib.request.HTTPRedirectHandler,
         "redirect_request",
         _fake_super_redirect,
@@ -124,3 +134,10 @@ def test_safe_redirect_handler_allows_public_https(monkeypatch):
         None, None, 302, "Found", None, "https://hooks.example.com/alert"
     )
     assert result is sentinel
+
+
+def test_is_safe_url_empty_hostname():
+    assert not _is_safe_url("http://")
+    assert not _is_safe_url("http://user@")
+    assert not _cli_is_safe_url("http://")
+    assert not _cli_is_safe_url("http://user@")
