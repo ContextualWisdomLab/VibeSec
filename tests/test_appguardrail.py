@@ -1828,3 +1828,86 @@ def test_cli_routes_console_calls_through_accessibility_wrapper():
     ]
 
     assert direct_print_lines == []
+
+
+@pytest.mark.parametrize(
+    ("filename", "source"),
+    [
+        pytest.param(
+            "os_system.py",
+            "os.system(user_input)\n",
+            id="os-system",
+        ),
+        pytest.param(
+            "os_popen.py",
+            "os.popen(command)\n",
+            id="os-popen",
+        ),
+        pytest.param(
+            "subprocess_shell.py",
+            "subprocess.call(command, shell=True)\n",
+            id="subprocess-shell",
+        ),
+        pytest.param(
+            "subprocess_nested_shell.py",
+            "subprocess.call(build_command(user_input), shell=True)\n",
+            id="nested-subprocess-shell",
+        ),
+    ],
+)
+def test_python_shell_spawning_apis_are_detected_independently(
+    tmp_path: Path,
+    filename: str,
+    source: str,
+) -> None:
+    """Detect each Python shell-spawning API without shared-fixture masking."""
+    target = tmp_path / filename
+    target.write_text(source, encoding="utf-8")
+
+    findings = _scan_file(target, tmp_path)
+
+    assert [item["rule_id"] for item in findings].count(
+        "python-command-injection"
+    ) == 1
+
+
+def test_python_shell_spawning_rule_describes_both_shell_mechanisms(
+    tmp_path: Path,
+) -> None:
+    """Explain implicit os/subprocess shells separately from shell=True."""
+    target = tmp_path / "os_system.py"
+    target.write_text("os.system(user_input)\n", encoding="utf-8")
+
+    findings = [
+        item
+        for item in _scan_file(target, tmp_path)
+        if item["rule_id"] == "python-command-injection"
+    ]
+
+    assert len(findings) == 1
+    message = findings[0]["message"]
+    assert "os.system/os.popen" in message
+    assert "subprocess.getoutput/getstatusoutput execute through a shell" in message
+    assert "subprocess shell=True" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "subprocess.call(command)\n",
+        "subprocess.call(command, shell=False)\n",
+    ],
+)
+def test_python_shell_spawning_rule_ignores_non_shell_subprocess_calls(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    """Do not classify ordinary subprocess calls as shell execution."""
+    target = tmp_path / "subprocess_safe.py"
+    target.write_text(source, encoding="utf-8")
+
+    findings = _scan_file(target, tmp_path)
+
+    assert "python-command-injection" not in {
+        item["rule_id"] for item in findings
+    }

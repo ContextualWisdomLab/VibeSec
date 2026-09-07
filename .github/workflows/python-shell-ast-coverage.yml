@@ -1,0 +1,59 @@
+name: Python shell AST coverage
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - appguardrail_core/python_shell_detector.py
+      - scanner/cli/appguardrail.py
+      - tests/test_python_command_injection_ast.py
+      - requirements-python-shell-coverage.txt
+      - requirements-test.txt
+      - .github/workflows/python-shell-ast-coverage.yml
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - appguardrail_core/python_shell_detector.py
+      - scanner/cli/appguardrail.py
+      - tests/test_python_command_injection_ast.py
+      - requirements-python-shell-coverage.txt
+      - requirements-test.txt
+      - .github/workflows/python-shell-ast-coverage.yml
+
+permissions:
+  contents: read
+
+jobs:
+  exact-branch-coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install immutable test and coverage tools
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            --require-hashes -r requirements-test.txt
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            --require-hashes -r requirements-python-shell-coverage.txt
+      - name: Verify 100% detector statements and branches
+        run: |
+          coverage erase
+          coverage run --branch \
+            --source=appguardrail_core.python_shell_detector \
+            -m pytest -q tests/test_python_command_injection_ast.py
+          coverage report --show-missing --fail-under=100 \
+            --include=appguardrail_core/python_shell_detector.py
+      - name: Compile production and test modules
+        run: >-
+          python -m compileall -q
+          appguardrail_core/python_shell_detector.py
+          scanner/cli/appguardrail.py
+          tests/test_python_command_injection_ast.py

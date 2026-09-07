@@ -7,6 +7,7 @@
 - 대시보드 검색창 커서 유지 — 검색어 중간에서 텍스트를 수정할 때마다 커서가 검색어의 맨 끝으로 점프하는 불편함을 수정했습니다. 이제 입력창의 커서 위치(`selectionStart`/`selectionEnd`)가 동적 렌더링 이후에도 원래 위치에 정확히 유지되어 자연스러운 타이핑 경험을 제공합니다.
 
 ### 보안
+- Python 명령 주입 탐지가 `os.system`·`os.popen`의 암묵적 셸 실행과 `subprocess.Popen`·`run`·`call`·`check_call`·`check_output(..., shell=True)`를 정확히 구분해 설명하고, 중첩된 명령 생성 호출 뒤의 `shell=True`까지 탐지하도록 보강했습니다. 각 API와 비셸 `subprocess` 음성 사례를 독립 회귀로 검증합니다.
 - 리포트 출력 하드닝 — 생성된 markdown 리포트가 HTML로 렌더될 때 악성 finding 내용(예: 외부 엔진이 스캔한 코드의 `<script>`)이 주입되지 않도록, 프로즈 필드(message/remediation/verification)를 HTML 이스케이프하고 snippet의 code-fence 탈출을 무력화합니다(모든 리포트 타입). rule_id/category/context 등 제약된 식별자는 그대로 둡니다.
 - control plane API 하드닝: (1) 요청 본문을 10MiB로 캡하고 음수 Content-Length를 거부합니다(유효 키 소지자의 OOM/EOF-hang 방지). (2) `limit`/`offset` 쿼리 파라미터를 클램프합니다 — sqlite에서 `LIMIT -1`은 무제한이므로 음수를 그대로 전달하면 페이지네이션 캡이 우회됐습니다(list 1..1000, trend 1..365, offset ≥0).
 

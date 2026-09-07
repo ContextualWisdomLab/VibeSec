@@ -68,6 +68,10 @@ from appguardrail_core.external import build_external_scan_plan
 from appguardrail_core.findings import NON_BLOCKING_CONTEXTS
 from appguardrail_core.findings import is_deploy_blocking as core_is_deploy_blocking
 from appguardrail_core.findings import normalize_findings
+from appguardrail_core.python_shell_detector import (
+    PYTHON_COMMAND_INJECTION_MESSAGE,
+    find_python_shell_calls,
+)
 from appguardrail_core.language import (
     LANGUAGE_EXTENSIONS,
     detect_language_axes,
@@ -450,15 +454,6 @@ SCAN_RULES = [
         "severity": "CRITICAL",
         "message": "Potential Command Injection detected: string concatenation or template literal in child_process execution. [OWASP A03:2021 - Injection]",
         "extensions": [".ts", ".tsx", ".js", ".jsx"],
-    },
-    {
-        "id": "python-command-injection",
-        "pattern": re.compile(
-            r"(?i)(?:os\.system|subprocess\.(?:Popen|run|call|check_call|check_output))\s*\([^)]*shell\s*=\s*True"
-        ),
-        "severity": "CRITICAL",
-        "message": "Potential Command Injection detected: shell=True used in Python subprocess/os command. [OWASP A03:2021 - Injection]",
-        "extensions": [".py"],
     },
     {
         "id": "path-traversal-risk",
@@ -2946,8 +2941,9 @@ def _scan_file(
 
     ext = file_path.suffix.lower()
     applicable_rules = _get_applicable_rules(ext)
+    python_shell_ast_enabled = ext == ".py"
 
-    if not applicable_rules:
+    if not applicable_rules and not python_shell_ast_enabled:
         return findings
 
     # ⚡ Bolt: Defer expensive Pathlib operations (like relative_to) and string
@@ -2961,6 +2957,26 @@ def _scan_file(
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
             if not content:
+                return findings
+            if python_shell_ast_enabled:
+                shell_calls = find_python_shell_calls(content)
+                if shell_calls and rel_path_str is None:
+                    rel_path_str = _sanitize_terminal_output(
+                        _display_path(context.relative_candidate(file_path))
+                    )
+                for shell_call in shell_calls:
+                    findings.append(
+                        _build_finding(
+                            "appguardrail-python-ast",
+                            "python-command-injection",
+                            "CRITICAL",
+                            PYTHON_COMMAND_INJECTION_MESSAGE,
+                            rel_path_str,
+                            shell_call.line,
+                            shell_call.snippet,
+                        )
+                    )
+            if not applicable_rules:
                 return findings
             count_newlines = content.count
             find_newline = content.find
