@@ -111,6 +111,7 @@ def test_find_python_shell_calls_resolves_supported_imports_and_aliases(
             "import subprocess\n"
             "[subprocess.run(command, shell=True) for subprocess in runners]\n"
         ),
+        "import os.path as pathmod\npathmod.system(user_input)\n",
     ],
 )
 def test_find_python_shell_calls_ignores_non_authoritative_bindings(source: str) -> None:
@@ -138,23 +139,30 @@ def test_find_python_shell_calls_returns_ordered_distinct_calls() -> None:
 
 
 @pytest.mark.parametrize(
-    ("source", "expected_api"),
+    ("source", "expected_api", "expected_line"),
     [
-        ("import os.path\nos.system(value)\n", "os.system"),
+        ("import os.path\nos.system(value)\n", "os.system", 2),
         (
             "import subprocess.helpers\nsubprocess.run(value, shell=True)\n",
             "subprocess.run",
+            2,
+        ),
+        (
+            "import os.path as pathmod\nimport os\nos.popen(command)\n",
+            "os.popen",
+            3,
         ),
     ],
 )
 def test_find_python_shell_calls_resolves_unaliased_dotted_modules(
     source: str,
     expected_api: str,
+    expected_line: int,
 ) -> None:
     """Treat unaliased dotted imports as their Python root module binding."""
     calls = find_python_shell_calls(source)
 
-    assert [(call.line, call.api) for call in calls] == [(2, expected_api)]
+    assert [(call.line, call.api) for call in calls] == [(expected_line, expected_api)]
 
 
 @pytest.mark.parametrize(
