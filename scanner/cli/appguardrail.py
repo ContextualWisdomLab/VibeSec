@@ -7,7 +7,7 @@ Usage:
   appguardrail scan [--trivy] [--external auto|off] [--bandit] [--ruff] [--semgrep] [--zap-baseline <url>] [--findings-json <path>] [--codegraph] [<path>]
   appguardrail monitor
   appguardrail review [--stack <stack>] [--db <db>] [--payments <payments>]
-  appguardrail report {buyer-diligence,founder-friendly,agency,fix-pack} --findings <json> [--out <path>]
+  appguardrail report {buyer-diligence,founder-friendly,agency,fix-pack} --findings <json> [--assurance <json>] [--out <path>]
   appguardrail org-bundle [--owner <org>] [--bundle-dir <path>]
   appguardrail hook [--codegraph]
   appguardrail --help
@@ -42,6 +42,7 @@ Options:
 import argparse
 import fnmatch
 import functools
+import hashlib
 import importlib.resources as resources  # nosemgrep: python.lang.compatibility.python37.python37-compatibility-importlib2
 import json
 import os
@@ -59,15 +60,9 @@ if __package__ in (None, ""):
 
 from appguardrail_core.config import load_config
 from appguardrail_core.controlplane import SafeRedirectHandler
-from appguardrail_core.pinned_https import (
-    DestinationValidationError,
-    PinnedHTTPSFailure,
-    post_json_pinned_https,
-)
 from appguardrail_core.external import build_external_scan_plan
-from appguardrail_core.findings import NON_BLOCKING_CONTEXTS
+from appguardrail_core.findings import NON_BLOCKING_CONTEXTS, normalize_findings
 from appguardrail_core.findings import is_deploy_blocking as core_is_deploy_blocking
-from appguardrail_core.findings import normalize_findings
 from appguardrail_core.language import (
     LANGUAGE_EXTENSIONS,
     detect_language_axes,
@@ -79,9 +74,15 @@ from appguardrail_core.org_bundle import (
     gh_error_message,
     gh_pr_list,
     gh_repo_list,
+    render_org_evidence,
+    write_bundle,
 )
 from appguardrail_core.org_bundle import load_json as load_org_json
-from appguardrail_core.org_bundle import render_org_evidence, write_bundle
+from appguardrail_core.pinned_https import (
+    DestinationValidationError,
+    PinnedHTTPSFailure,
+    post_json_pinned_https,
+)
 from appguardrail_core.reports import (
     REPORT_TYPE_LABELS,
     ReportContext,
@@ -89,6 +90,7 @@ from appguardrail_core.reports import (
     supported_report_types,
 )
 from appguardrail_core.rules import build_rule_metadata
+from appguardrail_core.scan_assurance import ASSURANCE_SCHEMA, MAX_ARTIFACT_BYTES
 from appguardrail_core.scan_paths import ScanPathContext, build_scan_path_context
 
 __version__ = "0.1.1"
@@ -1931,7 +1933,14 @@ def cmd_report(args):
         return 1
 
     try:
-        findings = _load_findings_json(Path(getattr(args, "findings")))
+        findings_path = Path(args.findings)
+        findings = _load_findings_json(findings_path)
+        assurance_path = getattr(args, "assurance", None)
+        assurance = (
+            _load_assurance_json(Path(assurance_path), findings_path)
+            if assurance_path
+            else None
+        )
     except (TypeError, RuntimeError) as exc:
         _console_print(f"❌ Error: {exc}", file=sys.stderr)
         _console_print(
@@ -1952,6 +1961,7 @@ def cmd_report(args):
         reviewer=getattr(args, "reviewer", None) or "AppGuardrail",
         engagement_type=getattr(args, "engagement_type", None) or "Pre-launch review",
         based_on=getattr(args, "based_on", None) or "AppGuardrail findings JSON",
+        assurance=assurance,
     )
     report = render_report(report_type, findings, context)
 
@@ -2057,6 +2067,53 @@ def _load_findings_json(path: Path):
         raise RuntimeError("Findings JSON must be an array or contain `findings`.")
     if not all(isinstance(item, dict) for item in data):
         raise RuntimeError("Every finding must be a JSON object.")
+    return data
+
+
+def _load_assurance_json(path: Path, findings_path: Path | None = None) -> dict:
+    """Load and bind one bounded assurance envelope to exact findings bytes."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read scan assurance JSON: {path}") from exc
+    if len(raw) > MAX_ARTIFACT_BYTES:
+        raise RuntimeError("Scan assurance JSON exceeds the 2 MiB limit.")
+    try:
+        data = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Scan assurance JSON is invalid: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema") != ASSURANCE_SCHEMA:
+        raise RuntimeError("Scan assurance JSON has an invalid schema.")
+    outcome = data.get("scan_outcome_code")
+    if not isinstance(outcome, str) or outcome not in {
+        "clean",
+        "findings_present",
+        "incomplete",
+        "failed",
+        "untrusted",
+    }:
+        raise RuntimeError("Scan assurance JSON has an invalid outcome.")
+    reasons = data.get("reasons")
+    if not isinstance(reasons, list) or not all(
+        isinstance(reason, str) for reason in reasons
+    ):
+        raise RuntimeError("Scan assurance JSON has invalid reasons.")
+    if findings_path is not None and outcome != "untrusted":
+        try:
+            findings_bytes = findings_path.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot read findings JSON for assurance binding: {findings_path}"
+            ) from exc
+        provenance = data.get("provenance")
+        findings_digest = hashlib.sha256(findings_bytes).hexdigest()
+        if not isinstance(provenance, dict) or (
+            provenance.get("findings_sha256") != findings_digest
+            or provenance.get("findings_digest_verified") is not True
+        ):
+            raise RuntimeError(
+                "Scan assurance does not match the exact findings JSON artifact."
+            )
     return data
 
 
@@ -3676,6 +3733,11 @@ def main():
             "--based-on",
             default=None,
             help="Review ID, issue, PR, or scan artifact this report is based on",
+        )
+        parser.add_argument(
+            "--assurance",
+            default=None,
+            help="Path to evaluator-produced appguardrail.scan-assurance.v1 JSON",
         )
 
     report_help = {

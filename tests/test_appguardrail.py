@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import re
 import tempfile
@@ -7,20 +8,34 @@ from unittest.mock import patch
 
 import pytest
 
-from scanner.cli.appguardrail import (SCAN_RULES, _bandit_findings,
-                                      _build_finding, _collect_files,
-                                      _detect_scan_languages,
-                                      _load_packaged_regex_rules,
-                                      _path_allowed_by_rule,
-                                      _print_scan_results, _ruff_findings,
-                                      _run_bandit_scan, _run_codegraph_command,
-                                      _run_codegraph_index,
-                                      _run_ruff_security_scan,
-                                      _run_semgrep_scan, _run_trivy_fs,
-                                      _run_zap_baseline, _scan_file,
-                                      _semgrep_findings, cmd_init, cmd_monitor,
-                                      cmd_org_bundle, cmd_report, cmd_scan,
-                                      cmd_serve)
+from scanner.cli.appguardrail import (
+    MAX_ARTIFACT_BYTES,
+    SCAN_RULES,
+    _bandit_findings,
+    _build_finding,
+    _collect_files,
+    _detect_scan_languages,
+    _load_assurance_json,
+    _load_packaged_regex_rules,
+    _path_allowed_by_rule,
+    _print_scan_results,
+    _ruff_findings,
+    _run_bandit_scan,
+    _run_codegraph_command,
+    _run_codegraph_index,
+    _run_ruff_security_scan,
+    _run_semgrep_scan,
+    _run_trivy_fs,
+    _run_zap_baseline,
+    _scan_file,
+    _semgrep_findings,
+    cmd_init,
+    cmd_monitor,
+    cmd_org_bundle,
+    cmd_report,
+    cmd_scan,
+    cmd_serve,
+)
 
 MOCK_RULES = [
     {
@@ -85,6 +100,7 @@ class ReportArgs:
         self.reviewer = "Demo Agency"
         self.engagement_type = "Pre-launch review"
         self.based_on = "review-123"
+        self.assurance = None
 
 
 class OrgBundleArgs:
@@ -1624,6 +1640,121 @@ def test_cmd_report_fix_pack_writes_markdown(tmp_path, capsys):
     assert "FIX-001" in report
     assert "python-requests-verify-false" in report
     assert "Fix pack written" in capsys.readouterr().out
+
+
+def test_cmd_report_consumes_scan_assurance(tmp_path):
+    """The report command carries evaluator outcomes into buyer-facing status."""
+    findings_file = tmp_path / "findings.json"
+    findings_file.write_text(json.dumps({"findings": []}))
+    assurance_file = tmp_path / "assurance.json"
+    assurance_file.write_text(
+        json.dumps(
+            {
+                "schema": "appguardrail.scan-assurance.v1",
+                "scan_outcome_code": "incomplete",
+                "reasons": ["detectors_incomplete"],
+                "provenance": {
+                    "findings_sha256": hashlib.sha256(
+                        findings_file.read_bytes()
+                    ).hexdigest(),
+                    "findings_digest_verified": True,
+                },
+            }
+        )
+    )
+    out_file = tmp_path / "report.md"
+    args = ReportArgs(findings_file, out_file)
+    args.assurance = str(assurance_file)
+
+    assert cmd_report(args) == 0
+    report = out_file.read_text()
+    assert "**Launch posture:** Hold; scan assurance is incomplete" in report
+    assert "**Scan assurance:** `incomplete` — detectors_incomplete" in report
+
+
+def test_cmd_report_rejects_assurance_for_different_findings(tmp_path, capsys):
+    """A qualified outcome cannot be reused with a different findings artifact."""
+    findings_file = tmp_path / "findings.json"
+    findings_file.write_text(json.dumps({"findings": []}))
+    assurance_file = tmp_path / "assurance.json"
+    assurance_file.write_text(
+        json.dumps(
+            {
+                "schema": "appguardrail.scan-assurance.v1",
+                "scan_outcome_code": "clean",
+                "reasons": [],
+                "provenance": {
+                    "findings_sha256": "0" * 64,
+                    "findings_digest_verified": True,
+                },
+            }
+        )
+    )
+    args = ReportArgs(findings_file)
+    args.assurance = str(assurance_file)
+
+    assert cmd_report(args) == 1
+    assert "does not match the exact findings JSON artifact" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-json",
+        b"\xff",
+        {"schema": "wrong", "scan_outcome_code": "clean", "reasons": []},
+        {
+            "schema": "appguardrail.scan-assurance.v1",
+            "scan_outcome_code": "unknown",
+            "reasons": [],
+        },
+        {
+            "schema": "appguardrail.scan-assurance.v1",
+            "scan_outcome_code": [],
+            "reasons": [],
+        },
+        {
+            "schema": "appguardrail.scan-assurance.v1",
+            "scan_outcome_code": "clean",
+            "reasons": "not-a-list",
+        },
+    ],
+)
+def test_load_assurance_json_rejects_invalid_artifacts(tmp_path, payload):
+    """The report consumer rejects malformed or ambiguous assurance artifacts."""
+    path = tmp_path / "assurance.json"
+    path.write_bytes(payload if isinstance(payload, bytes) else json.dumps(payload).encode())
+
+    with pytest.raises(RuntimeError):
+        _load_assurance_json(path)
+
+
+def test_load_assurance_json_rejects_missing_and_oversized_files(tmp_path):
+    """Assurance input remains bounded and missing files fail closed."""
+    with pytest.raises(RuntimeError):
+        _load_assurance_json(tmp_path / "missing.json")
+
+    path = tmp_path / "large.json"
+    path.write_bytes(b"x" * (MAX_ARTIFACT_BYTES + 1))
+    with pytest.raises(RuntimeError):
+        _load_assurance_json(path)
+
+
+def test_load_assurance_json_rejects_missing_findings_binding(tmp_path):
+    """A report cannot bind assurance when its findings artifact disappeared."""
+    assurance_path = tmp_path / "assurance.json"
+    assurance_path.write_text(
+        json.dumps(
+            {
+                "schema": "appguardrail.scan-assurance.v1",
+                "scan_outcome_code": "clean",
+                "reasons": [],
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="Cannot read findings JSON"):
+        _load_assurance_json(assurance_path, tmp_path / "missing-findings.json")
 
 
 def test_cmd_report_rejects_invalid_findings_shape(tmp_path, capsys):

@@ -16,7 +16,8 @@ Unknown, malformed, stale, future-dated, oversized, mismatched, and missing evid
 
 ## Standalone interface
 
-The module is executable without changing the main scanner CLI, which is intentionally left untouched while another active PR owns that file:
+The evaluator is executable independently and its output can be passed to the
+report command:
 
 ```bash
 python -m appguardrail_core.scan_assurance \
@@ -28,6 +29,24 @@ python -m appguardrail_core.scan_assurance \
 ```
 
 Exit status is `0` only for `clean`, `1` for trusted `findings_present`, and `2` for `incomplete`, `failed`, `untrusted`, invalid, or unavailable evidence. This makes a shell gate fail closed without conflating a trusted finding-bearing scan with an evidence failure.
+
+## Report consumer
+
+Pass the evaluator output to a buyer-facing report so evidence state cannot be
+silently replaced by a findings-only clean claim:
+
+```bash
+appguardrail report buyer-diligence \
+  --findings appguardrail-findings.json \
+  --assurance appguardrail-scan-assurance.json \
+  --out buyer-diligence.md
+```
+
+The report preserves the assurance outcome and holds launch status for
+`incomplete`, `failed`, and `untrusted` evidence. `findings_present` keeps the
+finding-derived posture, while `clean` is rendered as qualified clean scan
+evidence. The report consumer bounds and validates the envelope schema,
+outcome, reason list, and exact findings-artifact digest before rendering it.
 
 ## Evidence contract
 
@@ -48,7 +67,7 @@ The evaluator independently recomputes the findings SHA-256, checks exact caller
 
 This slice verifies artifact integrity and self-consistency; it does **not** yet make the evidence producer cryptographically authoritative. A trusted CI or scanner integration must construct `appguardrail.scan-evidence.v1` from scanner-owned counters and exact checkout identity rather than from user-editable form fields. A malicious producer that controls both the evidence manifest and the caller's expected repository/commit trust anchors remains outside this slice's trust boundary.
 
-The digest is a direct byte-level binding to the findings artifact, not a SLSA provenance attestation. The contract is compatible with a later signed-attestation layer but does not claim a SLSA level, certification, or provenance signature. SLSA 1.2 explicitly treats provenance verification and subject matching as separate trust work; this slice implements only the local artifact/identity qualification needed before AppGuardrail can label a result `clean`. SARIF parity and dashboard rendering remain separate parts of #927 and must not be inferred from this module.
+The digest is a direct byte-level binding to the findings artifact, not a SLSA provenance attestation. The contract is compatible with a later signed-attestation layer but does not claim a SLSA level, certification, or provenance signature. SLSA 1.2 explicitly treats provenance verification and subject matching as separate trust work; this slice implements only the local artifact/identity qualification needed before AppGuardrail can label a result `clean`. SARIF parity, dashboard rendering, and deploy-gate producer integration remain separate work and must not be inferred from the report consumer.
 
 ## Verification
 

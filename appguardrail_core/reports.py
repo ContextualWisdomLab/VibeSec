@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable
+from typing import Any
 
-from appguardrail_core.findings import (SEVERITIES, finding_sort_key,
-                                        is_deploy_blocking, normalize_finding,
-                                        severity_counts)
+from appguardrail_core.findings import (
+    SEVERITIES,
+    finding_sort_key,
+    is_deploy_blocking,
+    normalize_finding,
+    severity_counts,
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,7 @@ class ReportContext:
     reviewer: str = "AppGuardrail"
     engagement_type: str = "Pre-launch review"
     based_on: str = "AppGuardrail findings JSON"
+    assurance: Mapping[str, Any] | None = None
 
 
 REPORT_TYPE_LABELS = {
@@ -86,8 +92,9 @@ def render_buyer_diligence_report(
         "",
         "## Executive Readout",
         "",
-        f"**Launch posture:** {_launch_posture(blockers)}",
+        f"**Launch posture:** {_launch_posture(blockers, context.assurance)}",
         f"**Deploy-blocking findings:** {len(blockers)}",
+        *_assurance_report_lines(context.assurance),
         "",
         "| Severity | Count |",
         "|---|---:|",
@@ -153,7 +160,8 @@ def render_founder_friendly_report(
         "|---|---:|",
         *[f"| {severity.title()} | {counts[severity]} |" for severity in SEVERITIES],
         "",
-        f"**Overall Status:** {_founder_status(blockers)}",
+        f"**Overall Status:** {_founder_status(blockers, context.assurance)}",
+        *_assurance_report_lines(context.assurance),
         "",
         "## What We Checked",
         "",
@@ -223,7 +231,8 @@ def render_agency_report(
         f"**Critical findings requiring immediate action:** {counts['CRITICAL']}",
         f"**High-severity findings:** {counts['HIGH']}",
         f"**Total findings:** {len(normalized)}",
-        f"**Recommendation:** {_agency_recommendation(blockers)}",
+        f"**Recommendation:** {_agency_recommendation(blockers, context.assurance)}",
+        *_assurance_report_lines(context.assurance),
         "",
         "## Methodology",
         "",
@@ -313,6 +322,7 @@ def render_fix_pack(
         f"**App:** {context.app_name}",
         f"**Fix Pack generated:** {generated_at}",
         f"**Based on review:** {context.based_on}",
+        *_assurance_report_lines(context.assurance),
         "",
         "## How To Use This Fix Pack",
         "",
@@ -357,8 +367,51 @@ def render_fix_pack(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _launch_posture(blockers: list[dict[str, Any]]) -> str:
-    """Summarize whether blocker severity permits launch."""
+_ASSURANCE_OUTCOMES = frozenset(
+    {"clean", "findings_present", "incomplete", "failed", "untrusted"}
+)
+
+
+def _assurance_outcome(assurance: Mapping[str, Any] | None) -> str | None:
+    """Return a validated assurance outcome, or fail closed for bad input."""
+    if assurance is None:
+        return None
+    if assurance.get("schema") != "appguardrail.scan-assurance.v1":
+        return "untrusted"
+    outcome = assurance.get("scan_outcome_code")
+    if isinstance(outcome, str) and outcome in _ASSURANCE_OUTCOMES:
+        return outcome
+    return "untrusted"
+
+
+def _assurance_report_lines(assurance: Mapping[str, Any] | None) -> list[str]:
+    """Render optional scan-assurance state without exposing untrusted detail."""
+    outcome = _assurance_outcome(assurance)
+    if outcome is None:
+        return []
+    reasons = assurance.get("reasons") if assurance is not None else None
+    safe_reasons = (
+        ", ".join(
+            _md_prose(str(reason)[:120].replace("\n", " "))
+            for reason in reasons
+            if isinstance(reason, str)
+        )
+        if isinstance(reasons, list)
+        else ""
+    )
+    suffix = f" — {safe_reasons}" if safe_reasons else ""
+    return [f"**Scan assurance:** `{outcome}`{suffix}"]
+
+
+def _launch_posture(
+    blockers: list[dict[str, Any]], assurance: Mapping[str, Any] | None = None
+) -> str:
+    """Summarize whether blocker severity and evidence assurance permit launch."""
+    outcome = _assurance_outcome(assurance)
+    if outcome in {"incomplete", "failed", "untrusted"}:
+        return f"Hold; scan assurance is {outcome}"
+    if outcome == "clean":
+        return "Qualified clean scan evidence"
     if any(finding["severity"] == "CRITICAL" for finding in blockers):
         return "Hold pending critical remediation"
     if blockers:
@@ -475,8 +528,15 @@ def _prepare_report(
     return context, normalized, counts, blockers, generated_at
 
 
-def _founder_status(blockers: list[dict[str, Any]]) -> str:
-    """Return the founder-facing launch status label."""
+def _founder_status(
+    blockers: list[dict[str, Any]], assurance: Mapping[str, Any] | None = None
+) -> str:
+    """Return the founder-facing launch status and fail closed on weak evidence."""
+    outcome = _assurance_outcome(assurance)
+    if outcome in {"incomplete", "failed", "untrusted"}:
+        return f"Not ready; scan assurance is {outcome}"
+    if outcome == "clean":
+        return "Cleared by qualified clean scan evidence"
     if any(finding["severity"] == "CRITICAL" for finding in blockers):
         return "Not ready for public launch"
     if blockers:
@@ -551,8 +611,15 @@ def _next_steps(
     return steps
 
 
-def _agency_recommendation(blockers: list[dict[str, Any]]) -> str:
-    """Return the agency-facing launch recommendation."""
+def _agency_recommendation(
+    blockers: list[dict[str, Any]], assurance: Mapping[str, Any] | None = None
+) -> str:
+    """Return the agency recommendation and fail closed on weak evidence."""
+    outcome = _assurance_outcome(assurance)
+    if outcome in {"incomplete", "failed", "untrusted"}:
+        return f"Hold; scan assurance is {outcome}"
+    if outcome == "clean":
+        return "Cleared by qualified clean scan evidence"
     if any(finding["severity"] == "CRITICAL" for finding in blockers):
         return "Hold pending critical fixes"
     if blockers:

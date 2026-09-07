@@ -1,8 +1,12 @@
-from appguardrail_core.reports import (ReportContext, render_agency_report,
-                                       render_buyer_diligence_report,
-                                       render_fix_pack,
-                                       render_founder_friendly_report,
-                                       render_report, supported_report_types)
+from appguardrail_core.reports import (
+    ReportContext,
+    render_agency_report,
+    render_buyer_diligence_report,
+    render_fix_pack,
+    render_founder_friendly_report,
+    render_report,
+    supported_report_types,
+)
 
 
 def sample_findings():
@@ -182,3 +186,84 @@ def test_render_report_dispatches_supported_report_types():
     )
 
     assert "# AppGuardrail Fix Pack" in report
+
+
+def test_reports_surface_assurance_and_fail_closed() -> None:
+    """Every report type preserves assurance state before claiming launch readiness."""
+    for outcome in ("clean", "findings_present", "incomplete", "failed", "untrusted"):
+        assurance = {
+            "schema": "appguardrail.scan-assurance.v1",
+            "scan_outcome_code": outcome,
+            "reasons": ["evidence_stale"] if outcome != "clean" else [],
+        }
+        context = ReportContext(
+            generated_at="2026-07-02T00:00:00Z", assurance=assurance
+        )
+        buyer = render_buyer_diligence_report([], context)
+        founder = render_founder_friendly_report([], context)
+        agency = render_agency_report([], context)
+        fix_pack = render_fix_pack([], context)
+
+        assert f"**Scan assurance:** `{outcome}`" in buyer
+        assert f"**Scan assurance:** `{outcome}`" in founder
+        assert f"**Scan assurance:** `{outcome}`" in agency
+        assert f"**Scan assurance:** `{outcome}`" in fix_pack
+        if outcome == "clean":
+            assert "Qualified clean scan evidence" in buyer
+            assert "Cleared by qualified clean scan evidence" in founder
+            assert "Cleared by qualified clean scan evidence" in agency
+        elif outcome in {"incomplete", "failed", "untrusted"}:
+            assert f"scan assurance is {outcome}" in buyer
+            assert f"scan assurance is {outcome}" in founder
+            assert f"scan assurance is {outcome}" in agency
+
+    hostile = render_buyer_diligence_report(
+        [],
+        ReportContext(
+            generated_at="2026-07-02T00:00:00Z",
+            assurance={"schema": "wrong", "reasons": "do not trust this"},
+        ),
+    )
+    assert "**Scan assurance:** `untrusted`" in hostile
+    assert "do not trust this" not in hostile
+
+    sanitized = render_buyer_diligence_report(
+        [],
+        ReportContext(
+            generated_at="2026-07-02T00:00:00Z",
+            assurance={
+                "schema": "appguardrail.scan-assurance.v1",
+                "scan_outcome_code": "incomplete",
+                "reasons": ["bad <tag>\nline", 7],
+            },
+        ),
+    )
+    assert "bad &lt;tag&gt; line" in sanitized
+    assert "<tag>" not in sanitized
+
+    malformed_outcome = render_buyer_diligence_report(
+        [],
+        ReportContext(
+            generated_at="2026-07-02T00:00:00Z",
+            assurance={
+                "schema": "appguardrail.scan-assurance.v1",
+                "scan_outcome_code": [],
+                "reasons": [],
+            },
+        ),
+    )
+    assert "**Scan assurance:** `untrusted`" in malformed_outcome
+
+    critical = [
+        {
+            "rule_id": "critical-demo",
+            "severity": "CRITICAL",
+            "message": "Critical production issue.",
+            "file": "app.py",
+            "line": 1,
+            "context": "app-code",
+        }
+    ]
+    assert "Hold pending critical remediation" in render_buyer_diligence_report(critical)
+    assert "Not ready for public launch" in render_founder_friendly_report(critical)
+    assert "Hold pending critical fixes" in render_agency_report(critical)

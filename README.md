@@ -238,6 +238,7 @@ dependency.
 ```bash
 appguardrail report buyer-diligence \
   --findings reports/findings.json \
+  --assurance reports/scan-assurance.json \
   --out reports/buyer-diligence.md \
   --app-name "Demo SaaS" \
   --repository "ContextualWisdomLab/demo"
@@ -271,6 +272,9 @@ any object with a `findings` array. Report types are:
 
 Reports omit raw secrets and expand normalized metadata into launch posture,
 finding summaries, remediation, and verification checklists.
+When `--assurance` is supplied, reports also carry the evaluator's
+`clean`, `findings_present`, `incomplete`, `failed`, or `untrusted` outcome;
+only `clean` may produce a qualified-clean launch status.
 
 ### View findings in a dashboard
 
