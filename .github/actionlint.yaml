@@ -1,7 +1,0 @@
-paths:
-  .github/workflows/prepare-pypi-release.yml:
-    ignore:
-      - 'unexpected key "queue" for "concurrency" section'
-  .github/workflows/publish-pypi.yml:
-    ignore:
-      - 'unexpected key "queue" for "concurrency" section'
