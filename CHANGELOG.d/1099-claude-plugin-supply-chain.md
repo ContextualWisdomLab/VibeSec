@@ -117,3 +117,10 @@
   document from the existing SBOM parsers. It is not a second policy
   digest. Verify fails closed when the digest disagrees. Malformed
   manifests yield an empty-component SBOM, not a crash.
+  First-party ``SHA256SUMS``, ``SHA256SUMS.txt``, ``checksums.sha256``,
+  or ``*.sha256`` next to ``plugin.json`` that names the plugin artifact
+  or enumerated files fails as `claude-plugin-checksum-mismatch` when the
+  digest disagrees with bytes on disk. Matching checksums, comment-only
+  rows, and missing checksum files are not that class. Cosign or GPG
+  network verification is not required. Snippets are path labels, not
+  hashes or secrets. ``sbom_sha256`` stays the CycloneDX receipt digest.

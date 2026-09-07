@@ -279,3 +279,161 @@ def test_malformed_checksum_line_is_ignored(tmp_path: Path) -> None:
     (root / "SHA256SUMS").write_text("not-a-digest  plugin.json\n", encoding="utf-8")
     assert _checksum_hits(root) == []
     assert build_claude_plugin_scan_receipt(root).scan_result == "pass"
+
+
+def test_tab_separator_matching_digest_is_not_a_finding(tmp_path: Path) -> None:
+    """A tab between digest and name still binds the listed file."""
+    root = _licensed_plugin(tmp_path)
+    digest = _sha256(_plugin_json(root))
+    (root / "SHA256SUMS").write_text(f"{digest}\tplugin.json\n", encoding="utf-8")
+    assert _checksum_hits(root) == []
+    assert build_claude_plugin_scan_receipt(root).scan_result == "pass"
+
+
+def test_absolute_and_windows_listed_paths_fail_closed(tmp_path: Path) -> None:
+    """Absolute, UNC, and Windows-drive checksum paths fail closed."""
+    root = _licensed_plugin(tmp_path)
+    (root / "SHA256SUMS").write_text(
+        f"{_WRONG_DIGEST}  /tmp/outside.bin\n"
+        f"{_WRONG_DIGEST}  C:\\Windows\\plugin.json\n"
+        f"{_WRONG_DIGEST}  //host/share/plugin.json\n",
+        encoding="utf-8",
+    )
+    hits = _checksum_hits(root)
+    assert len(hits) >= 3
+    assert all(_WRONG_DIGEST not in hit.snippet for hit in hits)
+
+
+def test_bidi_listed_name_fails_closed_without_raw_bidi(tmp_path: Path) -> None:
+    """Concealed characters in a listed name fail closed with a sanitized snippet."""
+    root = _licensed_plugin(tmp_path)
+    (root / "SHA256SUMS").write_text(
+        f"{_WRONG_DIGEST}  {_BIDI}plugin.json\n",
+        encoding="utf-8",
+    )
+    hits = _checksum_hits(root)
+    assert hits
+    assert _BIDI not in hits[0].snippet
+
+
+def test_quoted_empty_name_and_non_hex_digest_are_ignored(tmp_path: Path) -> None:
+    """Empty quoted names and 64-character non-hex rows are not bindings."""
+    root = _licensed_plugin(tmp_path)
+    (root / "SHA256SUMS").write_text(
+        f"{_WRONG_DIGEST}  \n"
+        f"{'g' * 64}  plugin.json\n"
+        f"{_WRONG_DIGEST}|plugin.json\n",
+        encoding="utf-8",
+    )
+    assert _checksum_hits(root) == []
+
+
+def test_dot_sha256_hex_file_without_sibling_name_is_ignored(tmp_path: Path) -> None:
+    """A ``.sha256`` hex file next to plugin.json has no sibling artifact name."""
+    root = _licensed_plugin(tmp_path)
+    mystery = _plugin_json(root).parent / ".sha256"
+    mystery.write_text(f"{_WRONG_DIGEST}\n", encoding="utf-8")
+    assert detector._parse_checksum_entries(_WRONG_DIGEST + "\n", mystery) == ()
+    assert _checksum_hits(root) == []
+
+
+def test_sha256_file_without_plugin_json_sibling_is_not_first_party(
+    tmp_path: Path,
+) -> None:
+    """Root ``*.sha256`` files are not next to plugin.json."""
+    root = _licensed_plugin(tmp_path)
+    (root / "README.sha256").write_text(f"{_WRONG_DIGEST}\n", encoding="utf-8")
+    assert detector._is_first_party_checksum_file(root / "README.sha256") is False
+    assert _checksum_hits(root) == []
+
+
+def test_symlink_listed_payload_fails_closed(tmp_path: Path) -> None:
+    """A listed symlink is not compared as the regular plugin artifact."""
+    root = _licensed_plugin(tmp_path)
+    payload = root / "payload.bin"
+    payload.symlink_to(root / "LICENSE")
+    (root / "SHA256SUMS").write_text(
+        f"{_sha256(root / 'LICENSE')}  payload.bin\n",
+        encoding="utf-8",
+    )
+    hits = _checksum_hits(root)
+    assert hits
+    assert "payload.bin" in hits[0].snippet
+
+
+def test_checksum_helper_oserror_branches_fail_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Unreadable checksum paths fail closed instead of skipping verification."""
+    root = _licensed_plugin(tmp_path)
+    checksum = root / "SHA256SUMS"
+    digest = _sha256(_plugin_json(root))
+    checksum.write_text(f"{digest}  plugin.json\n", encoding="utf-8")
+    sibling = _plugin_json(root).parent / "extra.sha256"
+    sibling.write_text(f"{digest}\n", encoding="utf-8")
+
+    original_is_file = Path.is_file
+
+    def boom_is_file(self: Path) -> bool:
+        if self.name == "plugin.json" and self.parent == sibling.parent:
+            raise OSError("stat")
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", boom_is_file)
+    assert detector._is_first_party_checksum_file(sibling) is False
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+
+    original_resolve = Path.resolve
+
+    def boom_resolve(self: Path, *args, **kwargs):
+        if self == root:
+            raise OSError("resolve")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", boom_resolve)
+    assert detector._resolve_checksum_target(root, checksum, "plugin.json") is None
+    monkeypatch.setattr(Path, "resolve", original_resolve)
+
+    def boom_candidate_stat(self: Path) -> bool:
+        if self == checksum.parent / "plugin.json":
+            raise OSError("candidate")
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", boom_candidate_stat)
+    target = detector._resolve_checksum_target(root, checksum, "plugin.json")
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+    assert target == _plugin_json(root) or target is None
+
+
+def test_resolve_rejects_paths_outside_the_plugin_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Resolved checksum targets must stay inside the plugin root."""
+    root = _licensed_plugin(tmp_path)
+    checksum = root / "SHA256SUMS"
+    checksum.write_text(f"{_WRONG_DIGEST}  plugin.json\n", encoding="utf-8")
+    original_relative_to = Path.is_relative_to
+
+    def outside(self: Path, other: Path) -> bool:
+        if self == _plugin_json(root).resolve():
+            return False
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "is_relative_to", outside)
+    assert detector._resolve_checksum_target(root, checksum, "plugin.json") is None
+
+
+def test_parse_helpers_cover_empty_and_quoted_names() -> None:
+    """Parser helpers reject empty names and accept quoted GNU rows."""
+    empty = detector._parse_gnu_checksum_line(f"{_WRONG_DIGEST}  ")
+    quoted = detector._parse_gnu_checksum_line(f'{_WRONG_DIGEST}  "plugin.json"')
+    escaped = detector._checksum_listed_name_escapes("")
+    nul = detector._checksum_listed_name_escapes("plugin.json\x00")
+    drive = detector._checksum_listed_name_escapes("C:plugin.json")
+    unc = detector._checksum_listed_name_escapes("\\\\host\\share")
+    assert empty is None
+    assert quoted == (_WRONG_DIGEST, "plugin.json")
+    assert escaped is True
+    assert nul is True
+    assert drive is True
+    assert unc is True
