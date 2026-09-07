@@ -127,8 +127,10 @@ def test_gh_issue_create_and_pr_review_stay_inventory(tmp_path: Path) -> None:
     assert inventory["github_release"] is False
 
 
-def test_kubectl_apply_and_docker_push_stay_inventory(tmp_path: Path) -> None:
-    """Deployment writes stay inventory; this slice does not own that family."""
+def test_kubectl_apply_and_docker_push_are_not_merge_or_release(
+    tmp_path: Path,
+) -> None:
+    """Deployment writes are not the merge or release command family."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nkubectl apply -f deploy.yml\ndocker push example/app:1\n",
@@ -137,7 +139,6 @@ def test_kubectl_apply_and_docker_push_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 

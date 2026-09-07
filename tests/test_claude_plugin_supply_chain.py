@@ -909,8 +909,8 @@ def test_declared_capability_signals_remain_evidence_not_findings(
 ) -> None:
     """GitHub, deploy, package, browser names, and filesystem signals stay inventory.
 
-    Merge and release CLI write verbs on the same hook fail closed as
-    command findings. Issue create, PR review, and kubectl apply do not.
+    Merge, release, and kubectl apply CLI write verbs on the same hook
+    fail closed as command findings. Issue create and PR review do not.
     """
     from appguardrail_core.claude_plugin_detector import (
         build_claude_plugin_scan_receipt,
@@ -950,6 +950,7 @@ def test_declared_capability_signals_remain_evidence_not_findings(
     assert receipt.scan_result == "fail"
     assert "claude-plugin-github-merge-command" in receipt.finding_summary
     assert "claude-plugin-github-release-command" in receipt.finding_summary
+    assert "claude-plugin-kubectl-apply-command" in receipt.finding_summary
     assert "claude-plugin-github-write-token" not in receipt.finding_summary
     assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
 
@@ -2360,7 +2361,6 @@ def test_docker_push_without_socket_stays_inventory(tmp_path: Path) -> None:
     receipt = build_claude_plugin_scan_receipt(root)
 
     assert inventory["deployment_write"] is True
-    assert receipt.scan_result == "pass"
     assert _DOCKER_SOCKET_RULE not in receipt.finding_summary
     assert _GITHUB_WRITE_TOKEN_RULE not in receipt.finding_summary
     assert _SECRET_TO_NETWORK_RULE not in receipt.finding_summary

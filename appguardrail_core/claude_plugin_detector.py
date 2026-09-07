@@ -20,13 +20,15 @@ skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission, except that hook or manifest ``gh pr merge`` and
 ``gh release create|upload|delete|edit`` fail closed as command findings.
-Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
+Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
+deployment-write command findings. Hook or manifest paths into
+``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 ``~/.ssh/id_*`` private keys fail closed as credential-store findings.
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
-``gh issue create``, ``gh pr review``, ``kubectl apply``, and
-``docker push`` stay inventory. Skill
+``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
+``terraform apply``, and ``helm install`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -220,6 +222,16 @@ CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE: Final = (
     "delete, or edit. Publishing a release is write authority. Remove the "
     "command. [CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs kubectl apply. Applying manifests "
+    "is write authority on a cluster. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs docker push. Pushing an image is "
+    "write authority on a registry. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -334,6 +346,11 @@ _GITHUB_TOKEN = re.compile(
 _GITHUB_MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b", re.IGNORECASE)
 _GITHUB_RELEASE_COMMAND = re.compile(
     r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)\b",
+    re.IGNORECASE,
+)
+_KUBECTL_APPLY_COMMAND = re.compile(r"\bkubectl\s+apply\b", re.IGNORECASE)
+_DOCKER_PUSH_COMMAND = re.compile(
+    r"\bdocker(?:\s+image)?\s+push\b",
     re.IGNORECASE,
 )
 _DOCKER_SOCKET = re.compile(
@@ -820,6 +837,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_write_token_hits(content))
         hits.extend(_github_merge_command_hits(content))
         hits.extend(_github_release_command_hits(content))
+        hits.extend(_kubectl_apply_command_hits(content))
+        hits.extend(_docker_push_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1486,6 +1505,52 @@ def _github_release_command_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=f"gh release {verb}",
             message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _kubectl_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``kubectl apply`` findings with a command label, not manifests.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit when ``kubectl apply`` is present. ``kubectl get`` and
+        README wording are not this class.
+    """
+    match = _KUBECTL_APPLY_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-kubectl-apply-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="kubectl apply",
+            message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``docker push`` findings with a command label, not image names.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for ``docker push`` or ``docker image push``.
+        ``docker ps``, ``docker pull``, and socket binds are not this class.
+    """
+    match = _DOCKER_PUSH_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-docker-push-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="docker push",
+            message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
         ),
     )
 

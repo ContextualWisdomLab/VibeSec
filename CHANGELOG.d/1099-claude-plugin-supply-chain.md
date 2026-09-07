@@ -22,8 +22,8 @@
   source, or marketplace identity, or replay against mutated bytes;
   verification is not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
-  admission as policy findings; `gh issue create` and `docker push` stay
-  inventory evidence. Unsigned `curl`/`wget` executable fetches and
+  admission as policy findings; `gh issue create` stays inventory
+  evidence. Unsigned `curl`/`wget` executable fetches and
   unpinned pip/npm/cargo URL installs fail admission; `package.json`
   `preinstall`/`install`/`postinstall` scripts that download or execute
   an unsigned payload fail closed on the same rules, while a lockfile-only
@@ -127,15 +127,18 @@
   Hook or manifest ``gh pr merge`` fails as
   `claude-plugin-github-merge-command`. ``gh release create``,
   ``upload``, ``delete``, or ``edit`` fails as
-  `claude-plugin-github-release-command`. ``gh issue create``,
-  ``gh pr review``, ``gh release list``, ``kubectl apply``, and
-  ``docker push`` stay inventory. Hardcoded PATs stay
-  `claude-plugin-github-write-token`. Snippets are command labels, not
-  tokens.
+  `claude-plugin-github-release-command`. Hook or manifest
+  ``kubectl apply`` fails as `claude-plugin-kubectl-apply-command`.
+  ``docker push`` and ``docker image push`` fail as
+  `claude-plugin-docker-push-command`. ``gh issue create``,
+  ``gh pr review``, ``gh release list``, ``kubectl get``, ``docker ps``,
+  ``terraform apply``, and ``helm install`` stay inventory. Hardcoded
+  PATs stay `claude-plugin-github-write-token`. Snippets are command
+  labels, not tokens.
   Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
   ``~/.config/gh/hosts.yml``, Docker ``config.json`` auth, ``cookies.txt``,
   ``~/.curl_home``, and ``~/.ssh/id_*`` private keys fail as
   `claude-plugin-credential-store-access`. Chrome and Firefox profile
   stores stay `claude-plugin-browser-profile-access`. README AWS wording,
-  ``gh issue create``, ``docker push``, and a declared ``0755`` echo hook
+  ``gh issue create``, and a declared ``0755`` echo hook
   are not that class. Snippets are path labels, not secret values.
