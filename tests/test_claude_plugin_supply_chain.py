@@ -536,6 +536,47 @@ def test_mcp_declaration_edges_cover_unbounded_shapes(tmp_path: Path) -> None:
     assert inspect_claude_plugin_file(".mcp.json", ".mcp.json", "[]") == ()
 
 
+def test_bidi_and_control_concealment_fails_closed(tmp_path: Path) -> None:
+    """Bidi overrides and C0 controls in a plugin manifest fail admission."""
+    target = tmp_path / ".claude-plugin" / "plugin.json"
+    target.parent.mkdir(parents=True)
+    hidden = "safe\u202eeman.elif"
+    target.write_text(
+        json.dumps(
+            {
+                "name": hidden,
+                "source": {
+                    "ref": "a727be1c7bd6064419b6f60d71993a19198adc17"
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    findings = _plugin_findings(target, tmp_path)
+    assert any(
+        finding["rule_id"] == "claude-plugin-concealed-identity" for finding in findings
+    )
+    assert all("\u202e" not in str(finding.get("snippet", "")) for finding in findings)
+
+
+def test_oversized_plugin_package_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hostile file-count or byte-size packages fail admission before silence."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _pinned_plugin(tmp_path)
+    monkeypatch.setattr(detector, "_MAX_PACKAGE_FILES", 1)
+    hits = detector.scan_claude_plugin_package(root)
+    assert any(hit.rule_id == "claude-plugin-oversized-package" for hit in hits)
+
+    monkeypatch.setattr(detector, "_MAX_PACKAGE_FILES", 10_000)
+    monkeypatch.setattr(detector, "_MAX_PACKAGE_BYTES", 4)
+    hits = detector.scan_claude_plugin_package(root)
+    assert any(hit.rule_id == "claude-plugin-oversized-package" for hit in hits)
+
+
 def test_missing_license_fails_package_admission(tmp_path: Path) -> None:
     """A plugin package without a LICENSE file is not a silent pass."""
     from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package

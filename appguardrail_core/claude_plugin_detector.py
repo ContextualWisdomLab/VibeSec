@@ -55,7 +55,22 @@ CLAUDE_PLUGIN_LICENSE_MISSING_MESSAGE: Final = (
     "evidence without inventing legal approval. "
     "[CWE-1104 - Use of Unmaintained Third Party Components]"
 )
+CLAUDE_PLUGIN_CONCEALED_IDENTITY_MESSAGE: Final = (
+    "Claude plugin manifest contains concealed control or bidirectional "
+    "formatting characters. Decode identity before admission. "
+    "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
+)
+CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
+    "Claude plugin package exceeds the bounded file count or scanned byte "
+    "budget. Hostile oversized trees fail admission. "
+    "[CWE-400 - Uncontrolled Resource Consumption]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
+_MAX_PACKAGE_FILES: Final = 10_000
+_MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
+_CONCEALED_CHAR = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200d\u202a-\u202e\u2066-\u2069]"
+)
 _SCANNER_NAME: Final = "appguardrail"
 _SCANNER_VERSION: Final = "0.1.1"
 
@@ -217,6 +232,17 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 file=".claude-plugin",
             )
         )
+    _, file_count, scanned_byte_count = _artifact_digest(root)
+    if file_count > _MAX_PACKAGE_FILES or scanned_byte_count > _MAX_PACKAGE_BYTES:
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-oversized-package",
+                line=1,
+                snippet=".claude-plugin",
+                message=CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE,
+                file=".claude-plugin",
+            )
+        )
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -372,8 +398,8 @@ def _is_hook_surface(filename: str, posix: str) -> bool:
 
 
 def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
-    """Return floating-ref, duplicate-JSON, MCP, and provider-secret hits."""
-    hits: list[PluginHit] = []
+    """Return floating-ref, duplicate-JSON, MCP, concealment, and secret hits."""
+    hits: list[PluginHit] = list(_concealment_hits(content))
     try:
         payload = _load_manifest_json(content)
     except _DuplicateJsonMember as exc:
@@ -410,6 +436,22 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
             )
         )
     return tuple(hits)
+
+
+def _concealment_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return hits for concealed control or bidirectional characters."""
+    match = _CONCEALED_CHAR.search(content)
+    if match is None:
+        return ()
+    codepoint = f"U+{ord(match.group(0)):04X}"
+    return (
+        PluginHit(
+            rule_id="claude-plugin-concealed-identity",
+            line=_line_of(content, match.group(0)),
+            snippet=codepoint,
+            message=CLAUDE_PLUGIN_CONCEALED_IDENTITY_MESSAGE,
+        ),
+    )
 
 
 class _DuplicateJsonMember(ValueError):
