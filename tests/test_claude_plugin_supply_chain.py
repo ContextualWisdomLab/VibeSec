@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -1902,3 +1903,260 @@ def test_archive_submodule_remaining_coverage_edges(
         is False
     )
     monkeypatch.setattr(Path, "is_dir", original_is_dir)
+
+
+_PINNED_COMMIT = "a727be1c7bd6064419b6f60d71993a19198adc17"
+_RECEIPT_SECRET = "sk-receipt-replay-must-not-leak"
+
+
+def _bound_identity_plugin(tmp_path: Path) -> Path:
+    """Write a pinned licensed plugin with matching marketplace identity."""
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    _write_marketplace(
+        root,
+        {
+            "name": "hook-plugin",
+            "version": "1.0.0",
+            "source": {
+                "source": "github",
+                "repo": "example/hook-plugin",
+                "ref": _PINNED_COMMIT,
+            },
+        },
+    )
+    return root
+
+
+def test_honest_pinned_licensed_plugin_receipt_verifies(tmp_path: Path) -> None:
+    """An honest receipt still binds the exact pinned licensed tree."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    verification = verify_plugin_scan_receipt(
+        receipt,
+        root,
+        expected_policy_sha256=receipt.scanner_policy_sha256,
+    )
+
+    assert receipt.scan_result == "pass"
+    assert receipt.source_commit_sha == _PINNED_COMMIT
+    assert receipt.marketplace_blob_sha
+    assert verification.matches is True
+    assert verification.mismatches == ()
+    assert verification.admitted is False
+    assert verification.as_dict()["admitted"] is False
+
+
+def test_one_file_byte_change_rejects_old_receipt(tmp_path: Path) -> None:
+    """Changing one admitted file byte makes the retained receipt stale."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    (root / "LICENSE").write_text("MIT\nchanged\n", encoding="utf-8")
+    verification = verify_plugin_scan_receipt(receipt, root)
+
+    assert verification.matches is False
+    assert "artifact_sha256" in verification.mismatches
+    assert verification.admitted is False
+
+
+def test_swapped_artifact_sha256_rejects_receipt(tmp_path: Path) -> None:
+    """A receipt whose artifact digest was swapped fails closed."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    swapped = replace(receipt, artifact_sha256="0" * 64)
+    verification = verify_plugin_scan_receipt(swapped, root)
+
+    assert verification.matches is False
+    assert "artifact_sha256" in verification.mismatches
+
+
+def test_swapped_scanner_policy_sha256_rejects_receipt(tmp_path: Path) -> None:
+    """A receipt bound to a different policy digest fails closed."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    swapped = replace(receipt, scanner_policy_sha256="0" * 64)
+    verification = verify_plugin_scan_receipt(swapped, root)
+    expected_mismatch = verify_plugin_scan_receipt(
+        receipt,
+        root,
+        expected_policy_sha256="0" * 64,
+    )
+
+    assert "scanner_policy_sha256" in verification.mismatches
+    assert "scanner_policy_sha256" in expected_mismatch.mismatches
+    assert verification.matches is False
+    assert expected_mismatch.matches is False
+
+
+def test_pass_receipt_replay_on_extra_undeclared_script_fails(
+    tmp_path: Path,
+) -> None:
+    """Replaying a pass receipt against a tree with a new undeclared script fails."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    hidden = root / "scripts" / "hidden.py"
+    hidden.parent.mkdir()
+    hidden.write_text("print('hidden')\n", encoding="utf-8")
+    verification = verify_plugin_scan_receipt(receipt, root)
+
+    assert receipt.scan_result == "pass"
+    assert verification.matches is False
+    assert "artifact_sha256" in verification.mismatches
+    assert "scan_result" in verification.mismatches
+    assert verification.admitted is False
+
+
+def test_stale_catalog_source_and_marketplace_identity_rejects_receipt(
+    tmp_path: Path,
+) -> None:
+    """Catalog, source, and marketplace digests must match the bound identity."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    catalog = verify_plugin_scan_receipt(
+        replace(receipt, catalog_commit_sha="b" * 40),
+        root,
+    )
+    source = verify_plugin_scan_receipt(
+        replace(receipt, source_commit_sha="c" * 40),
+        root,
+    )
+    marketplace = verify_plugin_scan_receipt(
+        replace(receipt, marketplace_blob_sha="d" * 64),
+        root,
+    )
+
+    plugin = root / ".claude-plugin" / "plugin.json"
+    payload = json.loads(plugin.read_text(encoding="utf-8"))
+    payload["source"]["ref"] = "e" * 40
+    plugin.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    stale_source = verify_plugin_scan_receipt(receipt, root)
+
+    mutated_root = _bound_identity_plugin(tmp_path / "mutated-market")
+    mutated_receipt = build_claude_plugin_scan_receipt(mutated_root)
+    (
+        mutated_root / ".claude-plugin" / "marketplace.json"
+    ).write_text(
+        (mutated_root / ".claude-plugin" / "marketplace.json").read_text(
+            encoding="utf-8"
+        )
+        + " ",
+        encoding="utf-8",
+    )
+    stale_market = verify_plugin_scan_receipt(mutated_receipt, mutated_root)
+
+    assert "catalog_commit_sha" in catalog.mismatches
+    assert "source_commit_sha" in source.mismatches
+    assert "marketplace_blob_sha" in marketplace.mismatches
+    assert "source_commit_sha" in stale_source.mismatches
+    assert "artifact_sha256" in stale_source.mismatches
+    assert "marketplace_blob_sha" in stale_market.mismatches
+    assert catalog.matches is False
+    assert source.matches is False
+    assert marketplace.matches is False
+    assert stale_source.matches is False
+    assert stale_market.matches is False
+
+
+def test_receipt_verification_omits_secrets_and_raw_bidi(
+    tmp_path: Path,
+) -> None:
+    """Verification reasons and receipts never echo secrets or raw bidi."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    (root / "LICENSE").write_text(
+        f"OPENAI_API_KEY={_RECEIPT_SECRET}\n\u202ehidden\n",
+        encoding="utf-8",
+    )
+    verification = verify_plugin_scan_receipt(receipt, root)
+    serialized = json.dumps([receipt.as_dict(), verification.as_dict()])
+
+    assert verification.matches is False
+    assert _RECEIPT_SECRET not in serialized
+    assert "OPENAI_API_KEY" not in serialized
+    assert "\u202e" not in serialized
+    assert all(isinstance(reason, str) for reason in verification.mismatches)
+
+
+def test_identical_source_and_policy_receipts_still_verify(
+    tmp_path: Path,
+) -> None:
+    """Identical source and policy bytes still share receipt identity."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    first = _bound_identity_plugin(tmp_path / "a")
+    second = _bound_identity_plugin(tmp_path / "b")
+    left = build_claude_plugin_scan_receipt(first)
+    right = build_claude_plugin_scan_receipt(second)
+
+    assert left.scan_receipt_id == right.scan_receipt_id
+    assert left.artifact_sha256 == right.artifact_sha256
+    assert left.scanner_policy_sha256 == right.scanner_policy_sha256
+    assert verify_plugin_scan_receipt(left, second).matches is True
+    assert verify_plugin_scan_receipt(right, first).matches is True
+
+
+def test_receipt_verification_coverage_edges(tmp_path: Path) -> None:
+    """Verification stays fail-closed on omitted policy pins and swapped ids."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        verify_plugin_scan_receipt,
+    )
+
+    root = _bound_identity_plugin(tmp_path)
+    receipt = build_claude_plugin_scan_receipt(root)
+    omitted = verify_plugin_scan_receipt(receipt, root)
+    swapped_id = verify_plugin_scan_receipt(
+        replace(receipt, scan_receipt_id="f" * 64),
+        root,
+    )
+    pass_on_fail = verify_plugin_scan_receipt(
+        replace(
+            build_claude_plugin_scan_receipt(tmp_path / "empty"),
+            scan_result="pass",
+        ),
+        tmp_path / "empty",
+    )
+
+    assert omitted.matches is True
+    assert omitted.mismatches == ()
+    assert "scan_receipt_id" in swapped_id.mismatches
+    assert swapped_id.matches is False
+    assert pass_on_fail.matches is False
+    assert "scan_result" in pass_on_fail.mismatches
