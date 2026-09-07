@@ -558,6 +558,82 @@ def receipt_matches_artifact(receipt: PluginScanReceipt, root: Path) -> bool:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PluginReceiptVerification:
+    """Fail-closed comparison of a retained receipt against current bytes.
+
+    Matching is not Noema admission. ``scan_result=pass`` on the retained
+    receipt never authorizes activation.
+    """
+
+    matches: bool
+    mismatches: tuple[str, ...]
+
+    @property
+    def admitted(self) -> bool:
+        """Return False; receipt verification is not product admission."""
+        return False
+
+    def as_dict(self) -> dict[str, object]:
+        """Return JSON-safe mismatch reasons without secret or bidi values."""
+        return {
+            "matches": self.matches,
+            "mismatches": list(self.mismatches),
+            "admitted": False,
+        }
+
+
+def verify_plugin_scan_receipt(
+    receipt: PluginScanReceipt,
+    root: Path,
+    *,
+    expected_policy_sha256: str | None = None,
+) -> PluginReceiptVerification:
+    """Fail closed unless the receipt still binds the current artifact and policy.
+
+    Args:
+        receipt: Previously issued scan receipt.
+        root: Materialized tree being admitted.
+        expected_policy_sha256: Caller-pinned policy digest. When omitted,
+            the current scanner policy bytes are required.
+
+    Returns:
+        Structured mismatch field names. Empty mismatches mean the receipt
+        still describes this tree and policy. ``admitted`` is always false:
+        ``scan_result=pass`` is not Noema admission. Reasons never include
+        secret literals or raw bidi characters.
+    """
+    live = build_claude_plugin_scan_receipt(root)
+    current_policy_sha256 = _sha256(Path(__file__).read_bytes())
+    expected = (
+        current_policy_sha256
+        if expected_policy_sha256 is None
+        else expected_policy_sha256
+    )
+    mismatches: list[str] = []
+    if receipt.artifact_sha256 != live.artifact_sha256:
+        mismatches.append("artifact_sha256")
+    if (
+        receipt.scanner_policy_sha256 != current_policy_sha256
+        or receipt.scanner_policy_sha256 != expected
+    ):
+        mismatches.append("scanner_policy_sha256")
+    if receipt.catalog_commit_sha != live.catalog_commit_sha:
+        mismatches.append("catalog_commit_sha")
+    if receipt.source_commit_sha != live.source_commit_sha:
+        mismatches.append("source_commit_sha")
+    if receipt.marketplace_blob_sha != live.marketplace_blob_sha:
+        mismatches.append("marketplace_blob_sha")
+    if receipt.scan_receipt_id != live.scan_receipt_id:
+        mismatches.append("scan_receipt_id")
+    if receipt.scan_result != live.scan_result:
+        mismatches.append("scan_result")
+    return PluginReceiptVerification(
+        matches=not mismatches,
+        mismatches=tuple(mismatches),
+    )
+
+
 def _empty_capability_inventory() -> dict[str, bool]:
     """Return every inventory key as false, in deterministic order."""
     return {key: False for key in CAPABILITY_INVENTORY_KEYS}
