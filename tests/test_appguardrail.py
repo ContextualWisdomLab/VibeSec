@@ -1874,7 +1874,7 @@ def test_python_shell_spawning_apis_are_detected_independently(
 def test_python_shell_spawning_rule_describes_both_shell_mechanisms(
     tmp_path: Path,
 ) -> None:
-    """Explain implicit os shells separately from subprocess shell=True."""
+    """Explain implicit os/subprocess shells separately from shell=True."""
     target = tmp_path / "os_system.py"
     target.write_text("os.system(user_input)\n", encoding="utf-8")
 
@@ -1885,8 +1885,10 @@ def test_python_shell_spawning_rule_describes_both_shell_mechanisms(
     ]
 
     assert len(findings) == 1
-    assert "os.system/os.popen execute through a shell" in findings[0]["message"]
-    assert "subprocess shell=True" in findings[0]["message"]
+    message = findings[0]["message"]
+    assert "os.system/os.popen" in message
+    assert "subprocess.getoutput/getstatusoutput execute through a shell" in message
+    assert "subprocess shell=True" in message
 
 
 @pytest.mark.parametrize(
