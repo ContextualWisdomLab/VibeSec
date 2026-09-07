@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
+import tarfile
+import zipfile
 
 import pytest
 
@@ -987,3 +990,354 @@ def test_capability_inventory_edges_skip_malformed_and_non_object_manifests(
     assert all(isinstance(inventory[key], bool) for key in inventory)
     assert any(hit.rule_id == "claude-plugin-undeclared-executable" for hit in hits)
     assert any(hit.file == "commands/run.py" for hit in hits)
+
+
+_NESTED_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_ARCHIVE_SECRET = "sk-archive-must-not-leak"
+_ARCHIVE_TRAVERSAL_RULE = "claude-plugin-archive-path-traversal"
+_UNADMITTED_SUBMODULE_RULE = "claude-plugin-unadmitted-submodule"
+
+
+def _write_zip(path: Path, members: dict[str, bytes]) -> Path:
+    """Write a purpose-built zip archive with the given member names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    return path
+
+
+def _write_tar(path: Path, members: dict[str, bytes], mode: str = "w") -> Path:
+    """Write a purpose-built tar archive with the given member names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(path, mode) as archive:
+        for name, payload in members.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return path
+
+
+def _write_gitmodules(root: Path, path: str, url: str, *, branch: str | None = None) -> None:
+    """Write a nested submodule pointer without inventing a Git SHA."""
+    lines = [
+        f'[submodule "{path}"]',
+        f"\tpath = {path}",
+        f"\turl = {url}",
+    ]
+    if branch is not None:
+        lines.append(f"\tbranch = {branch}")
+    lines.append("")
+    (root / ".gitmodules").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_gitlink(root: Path, submodule_path: str, sha: str) -> Path:
+    """Materialize a gitlink via gitdir HEAD recording ``sha``."""
+    nested = root / submodule_path
+    nested.mkdir(parents=True, exist_ok=True)
+    gitdir = root / ".git" / "modules" / Path(submodule_path)
+    gitdir.mkdir(parents=True, exist_ok=True)
+    (gitdir / "HEAD").write_text(sha + "\n", encoding="utf-8")
+    relative_gitdir = Path(os_relpath(gitdir, nested))
+    (nested / ".git").write_text(f"gitdir: {relative_gitdir.as_posix()}\n", encoding="utf-8")
+    return nested
+
+
+def os_relpath(target: Path, start: Path) -> str:
+    """Return a POSIX relative path from ``start`` to ``target``."""
+    import os
+
+    return Path(os.path.relpath(target, start)).as_posix()
+
+
+def _write_nested_plugin(nested: Path, sha: str) -> None:
+    """Write a pinned licensed nested plugin.json under ``nested``."""
+    _write_marketplace(
+        nested,
+        {
+            "name": "nested",
+            "version": "1.0.0",
+            "source": {
+                "source": "github",
+                "repo": "example/nested",
+                "ref": sha,
+            },
+        },
+        name="plugin.json",
+    )
+    (nested / "LICENSE").write_text("MIT\n", encoding="utf-8")
+
+
+def test_zip_parent_escape_member_fails_closed_and_is_not_extracted(
+    tmp_path: Path,
+) -> None:
+    """Zip members named ``../escape.sh`` must not leave the extract root."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(
+        root / "payload.zip",
+        {"../escape.sh": f"#!/bin/sh\necho {_ARCHIVE_SECRET}\n".encode()},
+    )
+    escaped = tmp_path / "escape.sh"
+
+    hits = inspect_claude_plugin_archive(archive, root)
+    package_hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    snippets = [hit.snippet for hit in (*hits, *package_hits)]
+    serialized = json.dumps(receipt.as_dict())
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in package_hits)
+    assert all("_" in hit.rule_id or "-" in hit.rule_id for hit in hits)
+    assert not escaped.exists()
+    assert receipt.scan_result == "fail"
+    assert _ARCHIVE_TRAVERSAL_RULE in receipt.finding_summary
+    assert _ARCHIVE_SECRET not in serialized
+    assert all(_ARCHIVE_SECRET not in snippet for snippet in snippets)
+    assert all("\u202e" not in snippet for snippet in snippets)
+
+
+def test_tar_absolute_member_fails_closed_and_is_not_extracted(
+    tmp_path: Path,
+) -> None:
+    """Tar members named ``/tmp/x`` must not be followed as plugin content."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_tar(
+        root / "payload.tar",
+        {"/tmp/x": f"{_ARCHIVE_SECRET}\n".encode()},
+    )
+    absolute = Path("/tmp/x")
+    existed = absolute.exists()
+    before = absolute.read_bytes() if existed else None
+
+    hits = inspect_claude_plugin_archive(archive, root)
+    package_hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in package_hits)
+    assert receipt.scan_result == "fail"
+    if existed:
+        assert absolute.read_bytes() == before
+    else:
+        assert not absolute.exists()
+    assert _ARCHIVE_SECRET not in json.dumps(receipt.as_dict())
+    assert all(_ARCHIVE_SECRET not in hit.snippet for hit in (*hits, *package_hits))
+
+
+def test_archive_windows_prefix_and_nested_dotdot_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Windows prefixes and nested ``..`` members are traversal, not content."""
+    from appguardrail_core.claude_plugin_detector import inspect_claude_plugin_archive
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    windows_zip = _write_zip(
+        root / "windows.zip",
+        {"C:\\Windows\\Temp\\x": b"ignored\n", "..\\escape.sh": b"ignored\n"},
+    )
+    nested_tar = _write_tar(
+        root / "nested.tar.gz",
+        {"hooks/../../escape.sh": b"ignored\n"},
+        mode="w:gz",
+    )
+    bidi_zip = _write_zip(
+        root / "bidi.zip",
+        {"..\u202eescape.sh": b"ignored\n"},
+    )
+
+    windows_hits = inspect_claude_plugin_archive(windows_zip, root)
+    nested_hits = inspect_claude_plugin_archive(nested_tar, root)
+    bidi_hits = inspect_claude_plugin_archive(bidi_zip, root)
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in windows_hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in nested_hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in bidi_hits)
+    assert all("\u202e" not in hit.snippet for hit in bidi_hits)
+    assert not (tmp_path / "escape.sh").exists()
+
+
+def test_safe_archive_member_is_not_a_traversal_finding(tmp_path: Path) -> None:
+    """In-tree archive members may be materialized and are not traversal."""
+    from appguardrail_core.claude_plugin_detector import inspect_claude_plugin_archive
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(root / "safe.zip", {"hooks/notes.txt": b"hello\n"})
+    hits = inspect_claude_plugin_archive(archive, root)
+    assert all(hit.rule_id != _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert (root / "hooks" / "notes.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_gitmodules_branch_main_without_sha_fails_closed(tmp_path: Path) -> None:
+    """A nested submodule URL on branch main without a SHA fails admission."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+        branch="main",
+    )
+    (root / "vendor" / "nested").mkdir(parents=True)
+
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert any(hit.rule_id == _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert receipt.scan_result == "fail"
+    assert _UNADMITTED_SUBMODULE_RULE in receipt.finding_summary
+    assert all("\u202e" not in hit.snippet for hit in hits)
+
+
+def test_gitlink_with_admitted_nested_plugin_is_not_unadmitted(
+    tmp_path: Path,
+) -> None:
+    """A full SHA gitlink plus pinned licensed nested plugin.json is negative."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(root, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, _NESTED_SHA)
+
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert all(hit.rule_id != _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert receipt.scan_result == "pass"
+    assert _UNADMITTED_SUBMODULE_RULE not in receipt.finding_summary
+
+
+def test_gitlink_sha_without_complete_nested_identity_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A recorded SHA is not admission when the nested package is incomplete."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    missing_manifest = _pinned_plugin(tmp_path / "missing-manifest")
+    _write_gitmodules(
+        missing_manifest,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    _write_gitlink(missing_manifest, "vendor/nested", _NESTED_SHA)
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(missing_manifest)
+    )
+
+    floating = _pinned_plugin(tmp_path / "floating")
+    _write_gitmodules(
+        floating,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(floating, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, "main")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(floating)
+    )
+
+    unlicensed = _pinned_plugin(tmp_path / "unlicensed")
+    _write_gitmodules(
+        unlicensed,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(unlicensed, "vendor/nested", _NESTED_SHA)
+    _write_marketplace(
+        nested,
+        {
+            "name": "nested",
+            "source": {"repo": "example/nested", "ref": _NESTED_SHA},
+        },
+        name="plugin.json",
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(unlicensed)
+    )
+
+
+def test_pinned_licensed_plugin_still_passes_archive_submodule_rules(
+    tmp_path: Path,
+) -> None:
+    """Existing pinned licensed plugins stay a pass without archives or gitlinks."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+        scan_claude_plugin_package,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    inventory = inventory_claude_plugin_capabilities(root)
+
+    assert hits == ()
+    assert receipt.scan_result == "pass"
+    assert receipt.finding_summary == ()
+    assert inventory["shell_execution"] is True
+    assert all(
+        hit.rule_id
+        not in {_ARCHIVE_TRAVERSAL_RULE, _UNADMITTED_SUBMODULE_RULE}
+        for hit in hits
+    )
+
+
+def test_archive_and_submodule_snippets_omit_secrets_and_bidi(
+    tmp_path: Path,
+) -> None:
+    """Snippets stay labels: no raw archive bytes, secrets, or bidi characters."""
+    from appguardrail_core.claude_plugin_detector import (
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(
+        root / "payload.zip",
+        {
+            "../escape.sh": f"OPENAI_API_KEY={_ARCHIVE_SECRET}\n".encode(),
+            "hooks/\u202ehidden.sh": b"ignored\n",
+        },
+    )
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+        branch="main",
+    )
+    hits = (
+        *inspect_claude_plugin_archive(archive, root),
+        *scan_claude_plugin_package(root),
+    )
+    snippets = [hit.snippet for hit in hits]
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert all(_ARCHIVE_SECRET not in snippet for snippet in snippets)
+    assert all("OPENAI_API_KEY" not in snippet for snippet in snippets)
+    assert all("\u202e" not in snippet for snippet in snippets)
