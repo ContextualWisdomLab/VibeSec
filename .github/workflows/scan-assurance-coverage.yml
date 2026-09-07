@@ -1,0 +1,48 @@
+name: Scan assurance coverage
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact AppGuardrail source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install hash-locked tests
+        run: >-
+          python -m pip install --disable-pip-version-check --no-cache-dir
+          --require-hashes -r requirements-test.txt
+      - name: Checkout verified Coverage.py source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: coveragepy/coveragepy
+          ref: 4c0e7ff425ecbb33e2b994b41118a71eb4e39021 # 7.15.4
+          path: .tools/coveragepy
+          persist-credentials: false
+      - name: Verify exact scan-assurance statement and branch coverage
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.tools/coveragepy:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q \
+            tests/test_scan_assurance.py \
+            tests/test_scan_assurance_module_entrypoint.py
+          python -m coverage report \
+            --include='appguardrail_core/scan_assurance.py' \
+            --precision=2 \
+            --show-missing \
+            --fail-under=100
