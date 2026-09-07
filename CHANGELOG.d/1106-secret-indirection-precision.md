@@ -6,4 +6,5 @@
   under `src/`, so credential-free `postgresql://runtime.invalid/...` sentinels
   in tests are not deploy-blocking. Comments about prototypes or hidden
   authority fields are not `todo-skip-auth` unless they skip, disable, bypass,
-  or defer authentication.
+  or defer authentication. LifeOS #247 `*.test.mjs` titles about author identity
+  and `*.integration.test.*` files under `src/` stay non-deploy-blocking.

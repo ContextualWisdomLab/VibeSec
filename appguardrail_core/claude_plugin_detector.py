@@ -8,6 +8,7 @@ undeclared hook is a policy finding. Inventory is evidence, not permission.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -34,6 +35,13 @@ CLAUDE_PLUGIN_UNDECLARED_EXECUTABLE_MESSAGE: Final = (
     "in the plugin manifest. Unknown hooks fail admission until classified. "
     "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
 )
+CLAUDE_PLUGIN_SYMLINK_ESCAPE_MESSAGE: Final = (
+    "Claude plugin package contains a symbolic link. Symlinks are not followed "
+    "and fail admission until the exact regular-file identity is declared. "
+    "[CWE-59 - Improper Link Resolution Before File Access]"
+)
+_SCANNER_NAME: Final = "appguardrail"
+_SCANNER_VERSION: Final = "0.1.1"
 
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _PROVIDER_SECRET = re.compile(
@@ -59,6 +67,63 @@ class PluginHit:
     snippet: str
     message: str
     file: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PluginScanReceipt:
+    """Bounded deterministic receipt for one Claude plugin artifact scan."""
+
+    scan_receipt_id: str
+    scanner_name: str
+    scanner_version: str
+    scanner_policy_sha256: str
+    catalog_repository: str
+    catalog_commit_sha: str
+    marketplace_blob_sha: str
+    marketplace_entry_sha256: str
+    plugin_name: str
+    plugin_version: str
+    source_repository: str
+    source_commit_sha: str
+    source_path: str
+    artifact_sha256: str
+    file_count: int
+    scanned_byte_count: int
+    capability_inventory_sha256: str
+    sarif_sha256: str
+    finding_summary: tuple[str, ...]
+    license_evidence_summary: str
+    scan_started_at: str
+    scan_completed_at: str
+    scan_result: str
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-safe receipt with no secret literals."""
+        return {
+            "scan_receipt_id": self.scan_receipt_id,
+            "scanner_name": self.scanner_name,
+            "scanner_version": self.scanner_version,
+            "scanner_policy_sha256": self.scanner_policy_sha256,
+            "catalog_repository": self.catalog_repository,
+            "catalog_commit_sha": self.catalog_commit_sha,
+            "marketplace_blob_sha": self.marketplace_blob_sha,
+            "marketplace_entry_sha256": self.marketplace_entry_sha256,
+            "plugin_name": self.plugin_name,
+            "plugin_version": self.plugin_version,
+            "source_repository": self.source_repository,
+            "source_commit_sha": self.source_commit_sha,
+            "source_path": self.source_path,
+            "artifact_sha256": self.artifact_sha256,
+            "file_count": self.file_count,
+            "scanned_byte_count": self.scanned_byte_count,
+            "capability_inventory_sha256": self.capability_inventory_sha256,
+            "sarif_sha256": self.sarif_sha256,
+            "finding_summary": list(self.finding_summary),
+            "license_evidence_summary": self.license_evidence_summary,
+            "scan_started_at": self.scan_started_at,
+            "scan_completed_at": self.scan_completed_at,
+            "scan_result": self.scan_result,
+        }
 
 
 def inspect_claude_plugin_file(
@@ -109,17 +174,17 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         root: Scan root that may contain ``.claude-plugin/``.
 
     Returns:
-        Undeclared executable findings. Empty when the tree is not a plugin
-        package or every hook is declared.
+        Undeclared executable and symlink findings. Empty when the tree is not
+        a plugin package or every hook is a declared regular file.
     """
     plugin_dir = root / ".claude-plugin"
-    if not plugin_dir.is_dir():
+    if not plugin_dir.is_dir() or plugin_dir.is_symlink():
         return ()
     manifest_path = plugin_dir / "plugin.json"
-    if not manifest_path.is_file():
+    if not manifest_path.is_file() or manifest_path.is_symlink():
         manifest_path = plugin_dir / "marketplace.json"
     declared: set[str] = set()
-    if manifest_path.is_file():
+    if manifest_path.is_file() and not manifest_path.is_symlink():
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -128,25 +193,133 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     hits: list[PluginHit] = []
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
-        if not directory.is_dir():
+        if not directory.is_dir() or directory.is_symlink():
             continue
-        for path in sorted(directory.rglob("*")):
+        for path in _walk_entries(directory):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                hits.append(
+                    PluginHit(
+                        rule_id="claude-plugin-symlink-escape",
+                        line=1,
+                        snippet=path.name[:120],
+                        message=CLAUDE_PLUGIN_SYMLINK_ESCAPE_MESSAGE,
+                        file=relative,
+                    )
+                )
+                continue
             if not path.is_file() or path.suffix.lower() not in _EXECUTABLE_SUFFIXES:
                 continue
-            relative = path.relative_to(root).as_posix()
             if relative in declared or path.name in declared:
                 continue
-            snippet = path.name[:120]
             hits.append(
                 PluginHit(
                     rule_id="claude-plugin-undeclared-executable",
                     line=1,
-                    snippet=snippet,
+                    snippet=path.name[:120],
                     message=CLAUDE_PLUGIN_UNDECLARED_EXECUTABLE_MESSAGE,
                     file=relative,
                 )
             )
     return tuple(hits)
+
+
+def build_claude_plugin_scan_receipt(
+    root: Path,
+    *,
+    scanner_version: str = _SCANNER_VERSION,
+    scan_started_at: str = "",
+    scan_completed_at: str = "",
+) -> PluginScanReceipt:
+    """Return a deterministic admission receipt for one plugin artifact.
+
+    Args:
+        root: Materialized plugin tree.
+        scanner_version: Scanner release identity recorded on the receipt.
+        scan_started_at: Optional caller-supplied start timestamp.
+        scan_completed_at: Optional caller-supplied completion timestamp.
+
+    Returns:
+        Receipt whose identity excludes wall-clock fields. ``scan_result`` is
+        ``pass`` only when ``.claude-plugin/`` exists and no policy findings
+        remain. Secret literals never appear on the receipt.
+    """
+    hits = _collect_plugin_hits(root)
+    finding_summary = tuple(sorted({hit.rule_id for hit in hits}))
+    identity = _plugin_identity(root)
+    artifact_sha256, file_count, scanned_byte_count = _artifact_digest(root)
+    marketplace_path = root / ".claude-plugin" / "marketplace.json"
+    marketplace_bytes = _regular_file_bytes(marketplace_path)
+    marketplace_blob_sha = _sha256(marketplace_bytes) if marketplace_bytes else ""
+    marketplace_entry_sha256 = _sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    )
+    policy_sha256 = _sha256(Path(__file__).read_bytes())
+    capability_inventory_sha256 = _sha256(
+        json.dumps(finding_summary, separators=(",", ":")).encode()
+    )
+    sarif_sha256 = _sha256(
+        json.dumps(
+            [
+                {"rule_id": hit.rule_id, "line": hit.line, "file": hit.file or ""}
+                for hit in hits
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
+    is_package = (root / ".claude-plugin").is_dir() and not (
+        root / ".claude-plugin"
+    ).is_symlink()
+    scan_result = "pass" if is_package and not finding_summary else "fail"
+    body = {
+        "scanner_name": _SCANNER_NAME,
+        "scanner_version": scanner_version,
+        "scanner_policy_sha256": policy_sha256,
+        "catalog_repository": "",
+        "catalog_commit_sha": "",
+        "marketplace_blob_sha": marketplace_blob_sha,
+        "marketplace_entry_sha256": marketplace_entry_sha256,
+        "plugin_name": identity["plugin_name"],
+        "plugin_version": identity["plugin_version"],
+        "source_repository": identity["source_repository"],
+        "source_commit_sha": identity["source_commit_sha"],
+        "source_path": identity["source_path"],
+        "artifact_sha256": artifact_sha256,
+        "file_count": file_count,
+        "scanned_byte_count": scanned_byte_count,
+        "capability_inventory_sha256": capability_inventory_sha256,
+        "sarif_sha256": sarif_sha256,
+        "finding_summary": list(finding_summary),
+        "license_evidence_summary": _license_summary(root),
+        "scan_result": scan_result,
+    }
+    receipt_id = _sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return PluginScanReceipt(
+        scan_receipt_id=receipt_id,
+        scan_started_at=scan_started_at,
+        scan_completed_at=scan_completed_at,
+        finding_summary=finding_summary,
+        **{key: value for key, value in body.items() if key != "finding_summary"},
+    )
+
+
+def receipt_matches_artifact(receipt: PluginScanReceipt, root: Path) -> bool:
+    """Return whether ``receipt`` still describes the current artifact bytes.
+
+    Args:
+        receipt: Previously issued receipt.
+        root: Current materialized tree.
+
+    Returns:
+        True only when the current artifact digest matches the receipt.
+    """
+    artifact_sha256, _, _ = _artifact_digest(root)
+    return artifact_sha256 == receipt.artifact_sha256 and (
+        receipt.scanner_policy_sha256 == _sha256(Path(__file__).read_bytes())
+    )
 
 
 def _is_manifest(filename: str, posix: str) -> bool:
@@ -264,3 +437,147 @@ def _line_of(content: str, token: str) -> int:
     if index < 0:
         return 1
     return content[:index].count("\n") + 1
+
+
+def _sha256(data: bytes) -> str:
+    """Return the hex SHA-256 digest of ``data``."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _walk_entries(root: Path) -> tuple[Path, ...]:
+    """Yield regular files and symlinks without following linked directories."""
+    found: list[Path] = []
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir(), key=lambda path: path.name, reverse=True)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    found.append(entry)
+                    continue
+                if entry.is_dir():
+                    stack.append(entry)
+                    continue
+                if entry.is_file():
+                    found.append(entry)
+            except OSError:
+                continue
+    return tuple(sorted(found, key=lambda path: path.as_posix()))
+
+
+def _regular_file_bytes(path: Path) -> bytes:
+    """Return bytes of a regular file, or empty bytes for missing/symlink paths."""
+    try:
+        if not path.is_file() or path.is_symlink():
+            return b""
+        return path.read_bytes()
+    except OSError:
+        return b""
+
+
+def _artifact_digest(root: Path) -> tuple[str, int, int]:
+    """Return SHA-256, file count, and byte count for regular files under ``root``."""
+    hasher = hashlib.sha256()
+    file_count = 0
+    scanned_byte_count = 0
+    for path in _walk_entries(root):
+        if path.is_symlink():
+            hasher.update(b"symlink:")
+            hasher.update(path.relative_to(root).as_posix().encode())
+            hasher.update(b"\0")
+            continue
+        payload = _regular_file_bytes(path)
+        relative = path.relative_to(root).as_posix().encode()
+        hasher.update(relative)
+        hasher.update(b"\0")
+        hasher.update(str(len(payload)).encode())
+        hasher.update(b"\0")
+        hasher.update(payload)
+        hasher.update(b"\0")
+        file_count += 1
+        scanned_byte_count += len(payload)
+    return hasher.hexdigest(), file_count, scanned_byte_count
+
+
+def _license_summary(root: Path) -> str:
+    """Return present license path names or ``absent`` without legal approval."""
+    names = [
+        path.relative_to(root).as_posix()
+        for path in _walk_entries(root)
+        if not path.is_symlink() and path.name.upper().startswith("LICENSE")
+    ]
+    return ",".join(names) if names else "absent"
+
+
+def _plugin_identity(root: Path) -> dict[str, str]:
+    """Return bounded plugin identity fields from the local manifest."""
+    identity = {
+        "plugin_name": "",
+        "plugin_version": "",
+        "source_repository": "",
+        "source_commit_sha": "",
+        "source_path": "",
+    }
+    for name in ("plugin.json", "marketplace.json"):
+        path = root / ".claude-plugin" / name
+        payload_bytes = _regular_file_bytes(path)
+        if not payload_bytes:
+            continue
+        try:
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        entries = list(_plugin_entries(payload))
+        if not entries:
+            continue
+        entry = entries[0]
+        identity["plugin_name"] = str(entry.get("name") or payload.get("name") or "")
+        identity["plugin_version"] = str(
+            entry.get("version") or payload.get("version") or ""
+        )
+        source = entry.get("source")
+        if isinstance(source, dict):
+            repo = source.get("repo") or source.get("source")
+            identity["source_repository"] = repo if isinstance(repo, str) else ""
+            identity["source_commit_sha"] = _source_ref(entry) or ""
+            path_value = source.get("path")
+            identity["source_path"] = path_value if isinstance(path_value, str) else ""
+        elif isinstance(entry.get("ref"), str):
+            identity["source_commit_sha"] = entry["ref"]
+        return identity
+    return identity
+
+
+def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Combine package-level and per-file Claude plugin findings."""
+    hits = list(scan_claude_plugin_package(root))
+    plugin_dir = root / ".claude-plugin"
+    if not plugin_dir.is_dir() or plugin_dir.is_symlink():
+        return tuple(hits)
+    for path in _walk_entries(plugin_dir):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            content = ""
+        hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+    for directory_name in _HOOK_DIRS:
+        directory = root / directory_name
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for path in _walk_entries(directory):
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative = path.relative_to(root).as_posix()
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                content = ""
+            hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+    return tuple(hits)

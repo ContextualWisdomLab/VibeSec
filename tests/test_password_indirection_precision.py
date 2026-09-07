@@ -109,3 +109,50 @@ def test_explicit_skip_auth_comment_remains_detected(tmp_path: Path) -> None:
     findings = _by_rule(target, tmp_path, "todo-skip-auth")
     assert len(findings) == 1
     assert findings[0]["context"] == "app-code"
+
+
+def test_lifeos_self_review_test_title_is_not_skip_auth(tmp_path: Path) -> None:
+    """LifeOS #247 test titles about author identity are not skip-auth findings."""
+    target = (
+        tmp_path
+        / "packages"
+        / "commercial-readiness"
+        / "src"
+        / "github-client-self-review-provenance.test.mjs"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "import { describe, it } from 'node:test';\n"
+        "describe('pull request review independence provenance', () => {\n"
+        "  it('rejects padded author identity instead of trimming it "
+        "into independent approval authority', async () => {\n"
+        "    assert.equal(false, false);\n"
+        "  });\n"
+        "  it('rejects decisive review authority when the pull request "
+        "author identity is malformed', async () => {\n"
+        "    assert.equal(false, false);\n"
+        "  });\n"
+        "});\n",
+        encoding="utf-8",
+    )
+
+    findings = _scan_file(target, tmp_path)
+    skip_auth = [finding for finding in findings if finding["rule_id"] == "todo-skip-auth"]
+
+    assert skip_auth == []
+    assert all(finding["context"] == "test" for finding in findings)
+    assert all(not is_deploy_blocking(finding) for finding in findings)
+
+
+def test_integration_test_filename_under_src_is_non_blocking_context(
+    tmp_path: Path,
+) -> None:
+    """Explicit *.integration.test.* files are test context even under src/."""
+    target = tmp_path / "src" / "github-client.integration.test.ts"
+    target.parent.mkdir(parents=True)
+    target.write_text("password='secret123'\n", encoding="utf-8")
+    findings = _by_rule(target, tmp_path, "hardcoded-password")
+
+    assert findings
+    assert findings[0]["context"] == "test"
+    assert not is_deploy_blocking(findings[0])
