@@ -2,10 +2,11 @@
 
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
-undeclared hook, archive path escape, unadmitted nested submodule, hardcoded
-GitHub write token, Docker socket bind, or secret copied into a network
-request is a policy finding. Capability inventory is evidence, not
-permission: presence of a capability is not a finding by itself.
+unsigned executable download, unpinned package URL install, undeclared hook,
+archive path escape, unadmitted nested submodule, hardcoded GitHub write
+token, Docker socket bind, or secret copied into a network request is a
+policy finding. Capability inventory is evidence, not permission: presence
+of a capability is not a finding by itself.
 """
 
 from __future__ import annotations
@@ -103,6 +104,16 @@ CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
     "credentials out of curl, wget, and fetch payloads. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
+CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE: Final = (
+    "Claude plugin hook downloads an unsigned executable and makes it "
+    "runnable. Pin and verify binaries; do not fetch mutable runtime "
+    "payloads. [CWE-494 - Download of Code Without Integrity Check]"
+)
+CLAUDE_PLUGIN_UNPINNED_PACKAGE_INSTALL_MESSAGE: Final = (
+    "Claude plugin hook installs a package from an unpinned URL. Pin "
+    "versions and integrity hashes; do not install mutable remote "
+    "artifacts. [CWE-494 - Download of Code Without Integrity Check]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
@@ -136,6 +147,34 @@ _SECRET_TO_NETWORK = re.compile(
     r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
     r"AWS_SECRET_ACCESS_KEY)(?:\})?",
     re.IGNORECASE,
+)
+_PIPE_TO_INTERPRETER = re.compile(
+    r"(?:curl|wget)\b[^\n]*\|\s*(?:python3?|node|nodejs|perl|ruby|pwsh|"
+    r"powershell)\b",
+    re.IGNORECASE,
+)
+_DOWNLOAD_TO_FILE = re.compile(
+    r"\b(?:curl|wget)\b[^\n]*?(?:\s|^)(?:-o|-O|--output-document|--output)\s+"
+    r"(?P<path>[^\s;|&]+)",
+    re.IGNORECASE,
+)
+_CHMOD_PLUS_X = re.compile(
+    r"\bchmod\s+(?:\+x|a\+x|u\+x)\s+(?P<path>[^\s;|&]+)",
+    re.IGNORECASE,
+)
+_UNPINNED_PACKAGE_INSTALL = re.compile(
+    r"\b(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|npm|pnpm|yarn|uv(?:\s+pip)?|"
+    r"cargo)\s+(?:install|add)\s+[^\n]*?(?:https?://|git\+https?://|git://)",
+    re.IGNORECASE,
+)
+_SK_LITERAL = re.compile(r"sk-[A-Za-z0-9_-]+")
+_PACKAGE_LOCK_NAMES: Final = frozenset(
+    {
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    }
 )
 _EXECUTABLE_SUFFIXES = frozenset(
     {".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".py"}
@@ -319,9 +358,15 @@ def inventory_claude_plugin_capabilities(root: Path) -> dict[str, bool]:
     """
     inventory = _empty_capability_inventory()
     texts: list[str] = []
+    saw_package_json = False
+    saw_lockfile = False
     for path in _walk_entries(root):
         if path.is_symlink():
             continue
+        if path.name == "package.json":
+            saw_package_json = True
+        elif path.name in _PACKAGE_LOCK_NAMES:
+            saw_lockfile = True
         suffix = path.suffix.lower()
         if suffix in _SHELL_SUFFIXES:
             inventory["shell_execution"] = True
@@ -339,6 +384,8 @@ def inventory_claude_plugin_capabilities(root: Path) -> dict[str, bool]:
         if path.name in _INVENTORY_MANIFESTS:
             _inventory_manifest_capabilities(text, inventory)
     _inventory_text_capabilities("\n".join(texts), inventory)
+    if saw_package_json and saw_lockfile:
+        inventory["package_install"] = True
     return {key: inventory[key] for key in CAPABILITY_INVENTORY_KEYS}
 
 
@@ -380,6 +427,9 @@ def inspect_claude_plugin_file(
                 message=CLAUDE_PLUGIN_PIPE_TO_SHELL_MESSAGE,
             )
         )
+    if hook_surface:
+        hits.extend(_unsigned_executable_download_hits(content))
+        hits.extend(_unpinned_package_install_hits(content))
     hits.extend(_github_write_token_hits(content))
     hits.extend(_docker_socket_hits(content))
     hits.extend(_secret_to_network_hits(content))
@@ -731,6 +781,7 @@ def _is_hook_surface(filename: str, posix: str) -> bool:
     in_plugin_tree = (
         "/hooks/" in posix_norm
         or "/scripts/" in posix_norm
+        or "/commands/" in posix_norm
         or "/.claude-plugin/" in posix_norm
     )
     if not in_plugin_tree:
@@ -788,6 +839,70 @@ def _secret_to_network_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=f"{client} ${name}"[:120],
             message=CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE,
+        ),
+    )
+
+
+def _sanitize_plugin_snippet(value: str) -> str:
+    """Return a bidi-free snippet without token bodies or sk- secret literals."""
+    cleaned = _CONCEALED_CHAR.sub("", value)
+    cleaned = _GITHUB_TOKEN.sub(lambda match: match.group("prefix"), cleaned)
+    cleaned = _SK_LITERAL.sub("sk-", cleaned)
+    return cleaned.strip()[:120]
+
+
+def _downloaded_path_executed(content: str, path: str) -> bool:
+    """Return whether ``path`` is invoked as a command after download."""
+    pattern = re.compile(
+        rf"(?:^|&&|;|\n)\s*(?:(?:ba)?sh\s+)?{re.escape(path)}\b",
+        re.MULTILINE,
+    )
+    return pattern.search(content) is not None
+
+
+def _unsigned_executable_download_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return unsigned runtime-download findings from hook or script text."""
+    hits: list[PluginHit] = []
+    seen_lines: set[int] = set()
+
+    def add(match: re.Match[str]) -> None:
+        """Record one download finding, skipping a second hit on the same line."""
+        line = content[: match.start()].count("\n") + 1
+        if line in seen_lines:
+            return
+        seen_lines.add(line)
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-unsigned-executable-download",
+                line=line,
+                snippet=_sanitize_plugin_snippet(match.group(0).splitlines()[0]),
+                message=CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE,
+            )
+        )
+
+    for match in _PIPE_TO_INTERPRETER.finditer(content):
+        add(match)
+    chmod_paths = {
+        match.group("path").strip("'\"") for match in _CHMOD_PLUS_X.finditer(content)
+    }
+    for match in _DOWNLOAD_TO_FILE.finditer(content):
+        path = match.group("path").strip("'\"")
+        if path in chmod_paths or _downloaded_path_executed(content, path):
+            add(match)
+    return tuple(hits)
+
+
+def _unpinned_package_install_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return unpinned URL package-install findings from hook or script text."""
+    match = _UNPINNED_PACKAGE_INSTALL.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-unpinned-package-install",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=_sanitize_plugin_snippet(match.group(0).splitlines()[0]),
+            message=CLAUDE_PLUGIN_UNPINNED_PACKAGE_INSTALL_MESSAGE,
         ),
     )
 

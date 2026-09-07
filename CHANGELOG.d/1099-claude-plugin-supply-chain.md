@@ -18,4 +18,7 @@
   not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
   admission as policy findings; `gh issue create` and `docker push` stay
-  inventory evidence. `.claude-plugin/` is included in the scan walk.
+  inventory evidence. Unsigned `curl`/`wget` executable fetches and
+  unpinned pip/npm/cargo URL installs fail admission; a `package.json`
+  plus lockfile without a postinstall download stays `package_install`
+  inventory. `.claude-plugin/` is included in the scan walk.
