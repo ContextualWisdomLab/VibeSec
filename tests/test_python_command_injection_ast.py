@@ -68,6 +68,16 @@ from scanner.cli.appguardrail import _scan_file
             "subprocess.call",
             3,
         ),
+        (
+            "import subprocess\nsubprocess.getoutput(user_input)\n",
+            "subprocess.getoutput",
+            2,
+        ),
+        (
+            "from subprocess import getstatusoutput as sh\nsh(command)\n",
+            "subprocess.getstatusoutput",
+            2,
+        ),
     ],
 )
 def test_find_python_shell_calls_resolves_supported_imports_and_aliases(
@@ -349,6 +359,20 @@ def test_scanner_keeps_regex_rules_beside_ast_findings(tmp_path: Path) -> None:
 
     assert rule_ids.count("python-command-injection") == 1
     assert "hardcoded-password" in rule_ids
+
+
+def test_record_call_uses_api_when_line_exceeds_source() -> None:
+    """Keep a bounded snippet even when the parsed line is outside the source."""
+    visitor = _ShellCallVisitor("import os\n")
+    node = ast.Call(
+        func=ast.Name(id="system", ctx=ast.Load()),
+        args=[],
+        keywords=[],
+    )
+    node.lineno = 99
+    node.col_offset = 0
+    visitor._record_call(node, "os.system")
+    assert visitor.calls[0].snippet == "os.system"
 
 
 def test_detector_module_has_complete_docstrings() -> None:
