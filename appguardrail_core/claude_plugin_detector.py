@@ -562,6 +562,8 @@ def build_claude_plugin_scan_receipt(
     scanner_version: str = _SCANNER_VERSION,
     scan_started_at: str = "",
     scan_completed_at: str = "",
+    catalog_payload: object | None = None,
+    catalog_bytes: bytes | None = None,
 ) -> PluginScanReceipt:
     """Return a deterministic admission receipt for one plugin artifact.
 
@@ -570,18 +572,24 @@ def build_claude_plugin_scan_receipt(
         scanner_version: Scanner release identity recorded on the receipt.
         scan_started_at: Optional caller-supplied start timestamp.
         scan_completed_at: Optional caller-supplied completion timestamp.
+        catalog_payload: Optional parsed marketplace catalog document.
+        catalog_bytes: Optional exact catalog file bytes.
 
     Returns:
         Receipt whose identity excludes wall-clock fields. ``scan_result`` is
         ``pass`` only when ``.claude-plugin/`` exists and no policy findings
         remain. Secret literals never appear on the receipt.
     """
-    hits = _collect_plugin_hits(root)
+    hits = list(_collect_plugin_hits(root))
+    catalog = _catalog_identity(catalog_payload)
+    hits.extend(_catalog_bind_hits(root, catalog))
     finding_summary = tuple(sorted({hit.rule_id for hit in hits}))
     identity = _plugin_identity(root)
     artifact_sha256, file_count, scanned_byte_count = _artifact_digest(root)
     marketplace_path = root / ".claude-plugin" / "marketplace.json"
-    marketplace_bytes = _regular_file_bytes(marketplace_path)
+    marketplace_bytes = (
+        catalog_bytes if catalog_bytes is not None else _regular_file_bytes(marketplace_path)
+    )
     marketplace_blob_sha = _sha256(marketplace_bytes) if marketplace_bytes else ""
     marketplace_entry_sha256 = _sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
@@ -607,8 +615,8 @@ def build_claude_plugin_scan_receipt(
         "scanner_name": _SCANNER_NAME,
         "scanner_version": scanner_version,
         "scanner_policy_sha256": policy_sha256,
-        "catalog_repository": "",
-        "catalog_commit_sha": "",
+        "catalog_repository": catalog["catalog_repository"],
+        "catalog_commit_sha": catalog["catalog_commit_sha"],
         "marketplace_blob_sha": marketplace_blob_sha,
         "marketplace_entry_sha256": marketplace_entry_sha256,
         "plugin_name": identity["plugin_name"],
@@ -683,6 +691,8 @@ def verify_plugin_scan_receipt(
     root: Path,
     *,
     expected_policy_sha256: str | None = None,
+    catalog_payload: object | None = None,
+    catalog_bytes: bytes | None = None,
 ) -> PluginReceiptVerification:
     """Fail closed unless the receipt still binds the current artifact and policy.
 
@@ -691,6 +701,8 @@ def verify_plugin_scan_receipt(
         root: Materialized tree being admitted.
         expected_policy_sha256: Caller-pinned policy digest. When omitted,
             the current scanner policy bytes are required.
+        catalog_payload: Catalog document used when the receipt was issued.
+        catalog_bytes: Exact catalog bytes used when the receipt was issued.
 
     Returns:
         Structured mismatch field names. Empty mismatches mean the receipt
@@ -698,7 +710,11 @@ def verify_plugin_scan_receipt(
         ``scan_result=pass`` is not Noema admission. Reasons never include
         secret literals or raw bidi characters.
     """
-    live = build_claude_plugin_scan_receipt(root)
+    live = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog_payload,
+        catalog_bytes=catalog_bytes,
+    )
     current_policy_sha256 = _sha256(Path(__file__).read_bytes())
     expected = (
         current_policy_sha256
@@ -1179,6 +1195,65 @@ def _empty_identity() -> dict[str, str]:
         "source_commit_sha": "",
         "source_path": "",
     }
+
+
+def _empty_catalog_identity() -> dict[str, str]:
+    """Return blank catalog and plugin identity fields."""
+    return {
+        "catalog_repository": "",
+        "catalog_commit_sha": "",
+        **_empty_identity(),
+    }
+
+
+def _catalog_identity(payload: object | None) -> dict[str, str]:
+    """Return catalog repository/SHA plus first plugin identity from a catalog."""
+    identity = _empty_catalog_identity()
+    if not isinstance(payload, dict):
+        return identity
+    repo = payload.get("repository") or payload.get("catalog_repository")
+    sha = (
+        payload.get("commit")
+        or payload.get("catalog_commit_sha")
+        or payload.get("sha")
+    )
+    identity.update(_identity_from_payload(payload))
+    if isinstance(repo, str):
+        identity["catalog_repository"] = repo
+    if isinstance(sha, str):
+        identity["catalog_commit_sha"] = sha
+    return identity
+
+
+def _catalog_bind_hits(root: Path, catalog: dict[str, str]) -> tuple[PluginHit, ...]:
+    """Return findings when an external catalog disagrees with the artifact."""
+    hits: list[PluginHit] = []
+    catalog_sha = catalog.get("catalog_commit_sha") or ""
+    if catalog_sha and not _FULL_SHA.fullmatch(catalog_sha):
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-floating-git-ref",
+                line=1,
+                snippet=catalog_sha[:120],
+                message=CLAUDE_PLUGIN_FLOATING_REF_MESSAGE,
+                file="marketplace.json",
+            )
+        )
+    plugin = _plugin_identity(root)
+    for field in ("plugin_name", "source_repository", "source_commit_sha"):
+        left, right = catalog.get(field) or "", plugin.get(field) or ""
+        if left and right and left != right:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-source-mismatch",
+                    line=1,
+                    snippet=field,
+                    message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+                    file="marketplace.json",
+                )
+            )
+            break
+    return tuple(hits)
 
 
 def _identity_from_payload(payload: object) -> dict[str, str]:

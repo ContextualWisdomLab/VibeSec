@@ -365,3 +365,186 @@ def test_scan_plugin_receipt_write_and_verify_edges(
     captured = capsys.readouterr()
     assert "does not match" in captured.err
     assert "scan_result" not in captured.out
+
+
+_CATALOG_REPOSITORY = "anthropics/claude-plugins-community"
+
+
+def _catalog_document(
+    *,
+    repository: str = _CATALOG_REPOSITORY,
+    commit: str = _PINNED_COMMIT,
+    plugin_name: str = "safe-plugin",
+    plugin_repo: str = "example/safe-plugin",
+    plugin_ref: str = _PINNED_COMMIT,
+) -> dict:
+    """Return a bounded external marketplace catalog document."""
+    return {
+        "repository": repository,
+        "commit": commit,
+        "plugins": [
+            {
+                "name": plugin_name,
+                "version": "1.0.0",
+                "source": {"source": "github", "repo": plugin_repo, "ref": plugin_ref},
+            }
+        ],
+    }
+
+
+def test_scan_plugin_binds_matching_catalog_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A matching catalog SHA and repository bind onto the receipt."""
+    root = _pass_plugin(tmp_path / "plugin")
+    catalog = tmp_path / "catalog" / "marketplace.json"
+    _write_json(catalog, _catalog_document())
+    catalog_digest = __import__("hashlib").sha256(catalog.read_bytes()).hexdigest()
+
+    code, stdout, stderr = _run_cli(
+        monkeypatch,
+        capsys,
+        [
+            "scan-plugin",
+            "--plugin-root",
+            str(root),
+            "--marketplace-entry",
+            str(catalog),
+        ],
+    )
+
+    payload = json.loads(stdout)
+    assert code == 0
+    assert payload["scan_result"] == "pass"
+    assert payload["catalog_repository"] == _CATALOG_REPOSITORY
+    assert payload["catalog_commit_sha"] == _PINNED_COMMIT
+    assert payload["marketplace_blob_sha"] == catalog_digest
+    assert payload["source_repository"] == "example/safe-plugin"
+    assert payload["source_commit_sha"] == _PINNED_COMMIT
+    assert _SECRET not in stdout
+    assert _SECRET not in stderr
+
+
+def test_scan_plugin_rejects_floating_catalog_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A branch name is not an immutable catalog commit SHA."""
+    root = _pass_plugin(tmp_path / "plugin")
+    catalog = tmp_path / "catalog" / "marketplace.json"
+    _write_json(catalog, _catalog_document(commit="main"))
+
+    code, stdout, stderr = _run_cli(
+        monkeypatch,
+        capsys,
+        [
+            "scan-plugin",
+            "--plugin-root",
+            str(root),
+            "--marketplace-entry",
+            str(catalog),
+        ],
+    )
+
+    payload = json.loads(stdout)
+    assert code != 0
+    assert payload["scan_result"] == "fail"
+    assert "claude-plugin-floating-git-ref" in payload["finding_summary"]
+    assert payload["catalog_commit_sha"] == "main"
+
+
+def test_scan_plugin_rejects_catalog_source_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Catalog plugin identity must match the retrieved artifact."""
+    root = _pass_plugin(tmp_path / "plugin")
+    catalog = tmp_path / "catalog" / "marketplace.json"
+    _write_json(
+        catalog,
+        _catalog_document(plugin_repo="example/other-plugin"),
+    )
+
+    code, stdout, stderr = _run_cli(
+        monkeypatch,
+        capsys,
+        [
+            "scan-plugin",
+            "--plugin-root",
+            str(root),
+            "--marketplace-entry",
+            str(catalog),
+        ],
+    )
+
+    payload = json.loads(stdout)
+    assert code != 0
+    assert payload["scan_result"] == "fail"
+    assert "claude-plugin-source-mismatch" in payload["finding_summary"]
+    assert payload["catalog_repository"] == _CATALOG_REPOSITORY
+
+
+def test_catalog_identity_aliases_and_non_object_payloads(tmp_path: Path) -> None:
+    """Catalog bind reads alias keys and ignores non-object catalogs."""
+    from appguardrail_core.claude_plugin_detector import (
+        _catalog_bind_hits,
+        _catalog_identity,
+        build_claude_plugin_scan_receipt,
+    )
+
+    root = _pass_plugin(tmp_path / "plugin")
+    aliased = _catalog_identity(
+        {
+            "catalog_repository": _CATALOG_REPOSITORY,
+            "catalog_commit_sha": _PINNED_COMMIT,
+            "plugins": [
+                {
+                    "name": "safe-plugin",
+                    "source": {"repo": "example/safe-plugin", "ref": _PINNED_COMMIT},
+                }
+            ],
+        }
+    )
+    sha_alias = _catalog_identity({"sha": _PINNED_COMMIT})
+    empty = _catalog_identity(["not-an-object"])
+    missing = _catalog_identity(None)
+    name_mismatch = _catalog_bind_hits(
+        root,
+        {
+            "catalog_repository": "",
+            "catalog_commit_sha": "",
+            "plugin_name": "other-plugin",
+            "source_repository": "",
+            "source_commit_sha": "",
+        },
+    )
+    sha_mismatch = _catalog_bind_hits(
+        root,
+        {
+            "catalog_repository": "",
+            "catalog_commit_sha": "",
+            "plugin_name": "",
+            "source_repository": "",
+            "source_commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+    )
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=_catalog_document(),
+        catalog_bytes=b'{"repository":"anthropics/claude-plugins-community"}',
+    )
+
+    assert aliased["catalog_repository"] == _CATALOG_REPOSITORY
+    assert aliased["catalog_commit_sha"] == _PINNED_COMMIT
+    assert sha_alias["catalog_commit_sha"] == _PINNED_COMMIT
+    assert empty["catalog_repository"] == ""
+    assert missing["catalog_commit_sha"] == ""
+    assert any(hit.rule_id == "claude-plugin-source-mismatch" for hit in name_mismatch)
+    assert any(hit.rule_id == "claude-plugin-source-mismatch" for hit in sha_mismatch)
+    assert receipt.marketplace_blob_sha == __import__("hashlib").sha256(
+        b'{"repository":"anthropics/claude-plugins-community"}'
+    ).hexdigest()
