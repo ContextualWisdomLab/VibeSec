@@ -79,6 +79,13 @@ Persistent state must enforce organization ownership independent from request-pr
 
 Normalized findings are the source contract for reports/dashboard/control-plane ingestion. Reports and org evidence bundle separate verified counts, source warnings, and unavailable evidence. SBOM inventory records lock/manifests and component provenance according to supported formats; no invented version is accepted as a locked version.
 
+The standalone remediation handoff reuses report-safe normalized findings,
+IssueOps redaction, bounded provenance identifiers, and a deterministic compact
+JSON envelope. Its schema/version and `bundle_sha256` are verified before an
+agent consumes it; it is transport-neutral for standalone, naruon, and
+contextual-orchestrator use. Caller-supplied provenance remains an assertion,
+not cryptographic acquisition proof.
+
 ## 11. Security boundaries
 
 - repository-under-scan is untrusted input;

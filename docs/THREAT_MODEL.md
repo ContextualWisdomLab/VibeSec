@@ -43,6 +43,8 @@ flowchart LR
 | external-engine provenance lost | misleading findings | retain engine/rule/version/source |
 | deploy exclusions erase evidence | hidden risk | exclusions affect gate only; finding remains visible |
 | tampered SBOM/report evidence | acquisition/security misstatement | deterministic source/lock provenance and manifest hashes |
+| hostile remediation text reaches an agent as executable content | prompt/script injection or secret disclosure | inert text serialization, IssueOps redaction, bounded fields, no dynamic code handlers |
+| handoff payload is altered or malformed in transit | agent consumes false remediation/provenance | schema/version/size validation and recomputed bundle digest |
 | autonomous model self-approval | governance bypass | developer/reviewer/merge/release authority separation |
 | malicious shared skill (homoglyph name, injected instructions, exfiltration directive) | agent hijack and secret exfiltration | deny-listed skill sync with exact alias matching; catalog/skill text treated as untrusted data, never instructions (#1031) |
 | placeholder template published as an installable skill | discovery pollution and broken installs | reject unresolved placeholder names at sync; workspace state kept out of skill roots (#1031) |
@@ -58,6 +60,15 @@ A retained historical issue can tempt an audit to “cover” itself by mapping 
 ## Residual risk
 
 No static scanner proves application security. Dynamic/runtime/business-logic vulnerabilities may require external tools or human review. AppGuardrail must state toolset/evidence limits and avoid `Clean Scan` claims when a selected required engine could not run.
+
+## Remediation handoff boundary
+
+The handoff is a bounded transport artifact, not an authority grant. It copies
+only normalized remediation fields and selected identifiers, redacts obvious
+secrets, and rejects malformed or digest-tampered input. A caller-provided
+source digest identifies an input claim but does not authenticate acquisition;
+the producer remains responsible for source authority. UI clipboard fallback
+and announcements are separate consumers and must preserve this boundary.
 
 ## Review triggers
 

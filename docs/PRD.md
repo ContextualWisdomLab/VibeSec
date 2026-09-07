@@ -90,6 +90,11 @@ The control plane SHALL provide tenant-isolated scan history, drift, scoped API 
 
 Buyer/agency/founder/fix-pack/org evidence SHALL be derived from normalized findings and current repository evidence, clearly separate verified facts from gaps/warnings, and omit raw secrets.
 
+The Issue #928 handoff contract SHALL provide a bounded, deterministic,
+machine-readable remediation artifact with schema/version and source-artifact
+digest fields. It SHALL remain usable without the dashboard or control plane;
+UI copy actions are consumers and SHALL NOT become the source of truth.
+
 ### PRD-FR-009 SBOM/supply chain
 
 AppGuardrail SHALL produce deterministic component inventory with lockfile provenance where available and preserve tool/source/version evidence required for review or acquisition diligence.
@@ -124,3 +129,7 @@ AppGuardrail SHALL produce deterministic component inventory with lockfile prove
 ## 10. Release acceptance
 
 A release requires one exact protected head with full detector/test coverage, control-plane/security regressions, exact CI/security/review, packaging/SBOM/provenance, migration/recovery evidence for changed persistent state, updated CHANGELOG/version/artifacts, and post-publish smoke. PR #910 scanner detection and PR #924 write-boundary prevention are current protected-branch controls; PR #911 claims become current only after protected-branch integration and fresh protected-head verification.
+
+Issue #928's current branch slice implements only the standalone handoff
+contract. Dashboard clipboard actions, fallback UI, announcements, and focus
+behavior remain unimplemented until their design/Storybook gate is satisfied.

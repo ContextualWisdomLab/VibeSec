@@ -5,6 +5,12 @@
 
 Current control-plane persistence is SQLite behind repository service functions. The scanner itself is primarily filesystem/in-memory and emits normalized finding envelopes. This ERD distinguishes current persistent scan history from active-PR/planned detection-obligation evidence. Exact physical SQLite table/column names remain source/migration authority; logical evidence fields below define the product contract even when the current store embeds them in a normalized JSON envelope.
 
+The Issue #928 remediation handoff is intentionally not a new persistent
+entity: it is a bounded, transport-neutral artifact built from normalized
+findings. Its provenance and bundle digest travel in the artifact; dashboard
+or clipboard persistence is a later UI concern and is not implied by this
+contract slice.
+
 ## Current control-plane model
 
 ```mermaid

@@ -15,6 +15,7 @@
 | buyer/founder/agency/fix-pack reports | report modules | implemented-main |
 | CycloneDX SBOM | SBOM module | implemented-main |
 | organization buyer evidence | org evidence aggregator | implemented-main |
+| remediation evidence handoff | `appguardrail_core.evidence_handoff`, focused redaction/schema/digest tests | active branch only; not protected/current |
 | RCA-first feasibility scheduler | CI/agent policy | implemented-main |
 | every retained issue claim mapped to executable detector obligation | issue-detection audit | PR #911 active-PR |
 | authenticated workflow-result detector evidence | issue-detection audit workflow evidence | PR #911 active-PR |

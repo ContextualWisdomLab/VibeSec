@@ -1,0 +1,48 @@
+name: Remediation evidence handoff coverage
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "appguardrail_core/evidence_handoff.py"
+      - "tests/test_evidence_handoff.py"
+      - "docs/remediation-evidence-handoff.md"
+      - "docs/adr/0008-remediation-evidence-handoff.md"
+      - "CHANGELOG.d/928-evidence-handoff-contract.md"
+      - ".github/workflows/remediation-evidence-handoff-coverage.yml"
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "appguardrail_core/evidence_handoff.py"
+      - "tests/test_evidence_handoff.py"
+      - "docs/remediation-evidence-handoff.md"
+      - "docs/adr/0008-remediation-evidence-handoff.md"
+      - "CHANGELOG.d/928-evidence-handoff-contract.md"
+      - ".github/workflows/remediation-evidence-handoff-coverage.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remediation-evidence-handoff-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-remediation-evidence-handoff-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-test.txt
+      - name: Verify exact handoff coverage
+        run: |
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/evidence_handoff.py \
+            --test tests/test_evidence_handoff.py

@@ -164,6 +164,26 @@ flowchart LR
 
 A finding can trigger guidance but does not grant mutation authority. A clean rerun plus required repository gates is the verification loop.
 
+## Remediation handoff contract
+
+```mermaid
+sequenceDiagram
+    participant Producer as Scanner/report producer
+    participant Core as evidence_handoff
+    participant Transport as Clipboard/agent transport
+    participant Agent as Agent consumer
+
+    Producer->>Core: normalized findings + bounded provenance
+    Core->>Core: redact, bound, sort, digest
+    Core-->>Transport: versioned JSON bytes
+    Transport->>Core: received bytes
+    Core->>Core: verify schema, size, digest
+    Core-->>Agent: validated remediation evidence
+```
+
+The transport and future dashboard are consumers; neither may bypass the
+report-safe finding normalization or digest verification boundary.
+
 ## Maintenance rule
 
 When a new scanner, persistent service, detection-obligation class, outbound executor, fix authority, tenant boundary, evidence-authentication contract, or webhook delivery semantic changes, update these diagrams with PRD/TRD/Architecture/ERD/Threat/Test/Operability/ADR/Traceability in the same reviewed change.

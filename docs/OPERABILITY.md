@@ -7,6 +7,12 @@
 
 AppGuardrail can run as a local/CI scanner, optional multi-tenant control plane, continuous GitHub monitor, and organization evidence aggregator. The product remains useful when optional external scanners or the control plane are absent; capability/unavailability must be explicit in evidence.
 
+The remediation handoff is a local, bounded artifact operation. Build it from
+normalized findings, keep the exact serialized bytes when transporting it, and
+verify schema, size, and `bundle_sha256` before agent consumption. A successful
+clipboard operation is not evidence of source authenticity, and a failed UI
+copy must not silently discard the handoff.
+
 ## Scan health states
 
 Distinguish:

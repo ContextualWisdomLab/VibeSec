@@ -73,7 +73,7 @@ Autofix tests prove preview/apply idempotence and semantics preservation for eac
 
 ## Reporting/SBOM tests
 
-Normalize deterministic finding envelopes, SARIF validity, buyer/founder/agency/fix-pack rendering, raw-secret omission, evidence warnings, lockfile/version provenance, SBOM deterministic component identity, and organization bundle manifest integrity.
+Normalize deterministic finding envelopes, SARIF validity, buyer/founder/agency/fix-pack rendering, raw-secret omission, evidence warnings, remediation-handoff schema/version/digest validation, lockfile/version provenance, SBOM deterministic component identity, and organization bundle manifest integrity. The handoff module requires exact 100% statement and branch coverage for its focused tests.
 
 ## Performance
 
