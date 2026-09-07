@@ -58,7 +58,8 @@ jobs:
             --test tests/test_claude_plugin_license_mismatch.py \
             --test tests/test_claude_plugin_postinstall_download.py \
             --test tests/test_claude_plugin_dynamic_eval.py \
-            --test tests/test_claude_plugin_hidden_executable.py
+            --test tests/test_claude_plugin_hidden_executable.py \
+            --test tests/test_claude_plugin_browser_profile.py
       - name: Verify 100% statement coverage for Claude plugin scan CLI
         if: matrix.python-version == '3.13'
         run: |

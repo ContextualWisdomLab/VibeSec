@@ -45,3 +45,7 @@
   `claude-plugin-hidden-undeclared-executable`. `.git/` metadata,
   `.gitignore`, LICENSE, declared `hooks/pre.sh`, and `.mcp.json` are
   not that class. `.claude-plugin/` is included in the scan walk.
+  Host Chrome, Chromium, and Firefox profile stores on hook or manifest
+  surfaces fail as `claude-plugin-browser-profile-access`. A README path
+  mention and a bare ``Firefox`` product name stay inventory, not that
+  class. Docker sockets stay `claude-plugin-docker-socket`.
