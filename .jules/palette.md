@@ -81,3 +81,11 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+
+## 2026-08-14 - Playwright File Protocol Network Interception
+**Learning:** When using Playwright to visually verify static HTML files loaded via `file://` URIs, `page.route()` may fail to intercept `fetch` requests effectively due to Chromium's security policies and handling of the file protocol.
+**Action:** Mock the API by using `page.add_init_script()` to directly override `window.fetch` or inject mock data into the client-side context via `page.evaluate()` rather than relying on `page.route()`.
+
+## 2026-08-14 - Pointer-events and Cursor CSS Interactions
+**Learning:** Setting `pointer-events: none` on an element completely disables mouse interactions, which means a concurrent `cursor: not-allowed` rule on the same element will never be triggered. The element will fall back to its parent's cursor.
+**Action:** While `pointer-events: none` is useful for preventing clicks, recognize that it prevents custom cursors. For native elements like `<button disabled>`, rely on the `disabled` attribute along with `cursor: not-allowed` and visual fading. For non-native elements, use Javascript guards instead of `pointer-events: none` if a custom cursor is strictly required, or accept the parent's cursor.
