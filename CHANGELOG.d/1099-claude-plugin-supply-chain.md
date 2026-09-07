@@ -39,4 +39,6 @@
   LICENSE/NOTICE absence still fails closed; conflicting SPDX identifiers
   across the declared license field, LICENSE, and NOTICE fail as
   `claude-plugin-license-mismatch` without inventing legal approval.
-  `.claude-plugin/` is included in the scan walk.
+  Hook `eval`/`exec`/`compile`/`Function` and shell `eval` fail as
+  `claude-plugin-dynamic-eval`. `.claude-plugin/` is included in the
+  scan walk.
