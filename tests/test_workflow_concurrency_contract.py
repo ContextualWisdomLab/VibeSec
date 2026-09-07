@@ -76,7 +76,7 @@ def test_release_workflows_do_not_drop_pending_delivery() -> None:
     """Every release event needs its own run; GitHub concurrency replaces pending runs."""
     for name in RELEASE_WORKFLOWS:
         workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
-        assert "\nconcurrency:\n" not in workflow
+        assert not any(line.startswith("concurrency:") for line in workflow.splitlines())
 
 
 def test_exact_coverage_uses_the_existing_tests_workflow() -> None:
