@@ -50,7 +50,7 @@
 
 ## 2024-07-03 - Deduplicating lists of strings optimally
 **Learning:** Checking `if item not in list` for deduplicating strings requires linearly scanning the list for every item, creating $O(N^2)$ time complexity. This can cause bottlenecks if the list grows large. In modern Python (3.7+), standard dictionaries maintain insertion order.
-**Action:** Replace `if item not in list` iterations with `dict.fromkeys(iterator)` to leverage hash map lookups for $O(1)$ item deduplication, bringing overall complexity from $O(N^2)$ to $O(N)$ while preserving insertion order.
+**Action:** Replace `if item not in list` iterations with `dict.fromkeys(iterator)` to leverage hash map lookups for $O(1)$ item deduplication, bringing overall complexity from $O(N^2)$ to O(N) while preserving insertion order.
 
 ## 2024-07-08 - Path.relative_to overhead in file scanning loops
 **Learning:** Calling `pathlib.Path.relative_to()` inside nested loops (like per-match file scanning) is a massive performance bottleneck due to Pathlib's object instantiation and resolution overhead, far slower than raw string manipulations. Even deferred to the first match per file, string logic is significantly faster.
@@ -77,7 +77,3 @@
 ## 2024-11-20 - Optimize multiple tuple generation from a single collection
 **Learning:** `build_rule_metadata` derives exactly two collections, `owasp` and `cwe`, from the same references. Replacing its two generator traversals with one explicit loop reduces element visits from about 2N to N. Both versions remain O(N), so this is a constant-factor optimization rather than an asymptotic complexity improvement.
 **Action:** Combine repeated traversal when fixed derived collections share one source, while preserving ordering and classification semantics. Benchmark the production hot path before claiming a material wall-clock improvement.
-
-## 2024-11-21 - Optimize dict.fromkeys() generator overhead
-**Learning:** When using `dict.fromkeys()` for deduplication, passing a generator expression (e.g., `dict.fromkeys(item for ...)` ) incurs significant overhead due to generator initialization, frame allocation, and yielding.
-**Action:** When optimizing hot paths in Python, replace generator comprehensions inside `dict.fromkeys()` with explicit `for` loops updating a local dictionary (`seen = {}`). This reduces constant-factor overhead, resulting in noticeable speedups.
