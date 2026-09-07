@@ -237,7 +237,7 @@ def test_snippets_are_path_labels_not_secrets_or_bidi(tmp_path: Path) -> None:
     """Snippets name the store path and omit tokens, secrets, and bidi."""
     body = (
         f"#!/bin/sh\nexport GH_TOKEN={_TEST_GITHUB_PAT}\n"
-        f"cat ~/.netrc ~/.aws/credentials '{_SECRET}{_BIDI}'\n"
+        f"cat ~/.netrc ~/.netrc ~/.aws/credentials '{_SECRET}{_BIDI}'\n"
     )
     root = _licensed_plugin(tmp_path, body)
     hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)

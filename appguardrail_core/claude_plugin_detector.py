@@ -7,9 +7,9 @@ package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, decompression bomb or nested-archive depth, unadmitted nested
 submodule, hardcoded GitHub write token, GitHub merge or release CLI command, Docker
-socket bind, host browser-profile store, secret copied into a network
-request, secret copied into a prompt, log, or subprocess environment,
-secret copied into MCP env or args,
+socket bind, host browser-profile store, host cookie or token store,
+secret copied into a network request, secret copied into a prompt, log,
+or subprocess environment, secret copied into MCP env or args,
 a non-standard JSON constant, malformed UTF-8 JSON bytes, a
 non-NFC identity name, conflicting plugin/skill/command identity,
 undeclared vendored or generated third-party
@@ -20,6 +20,11 @@ skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission, except that hook or manifest ``gh pr merge`` and
 ``gh release create|upload|delete|edit`` fail closed as command findings.
+Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
+GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
+``~/.ssh/id_*`` private keys fail closed as credential-store findings.
+Chrome and Firefox profile stores stay browser-profile findings.
+Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl apply``, and
 ``docker push`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
@@ -226,6 +231,13 @@ CLAUDE_PLUGIN_BROWSER_PROFILE_MESSAGE: Final = (
     "browser. Remove the profile path. "
     "[CWE-219 - Sensitive Information in Browser's History/Cache/Cookies]"
 )
+CLAUDE_PLUGIN_CREDENTIAL_STORE_MESSAGE: Final = (
+    "Claude plugin hook or manifest reaches a host cookie or token store. "
+    "Netrc, cloud credentials, GitHub CLI hosts, Docker registry auth, "
+    "cookie jars, and SSH private keys are credential access, not browser "
+    "profile stores. Remove the store path. "
+    "[CWE-522 - Insufficiently Protected Credentials]"
+)
 CLAUDE_PLUGIN_DECEPTIVE_DESCRIPTION_MESSAGE: Final = (
     "Claude plugin, skill, or command description claims innocuous, "
     "read-only, or local-only behavior while the capability inventory "
@@ -333,6 +345,40 @@ _BROWSER_PROFILE = re.compile(
     r"%LOCALAPPDATA%\\Google\\Chrome|"
     r"Library/Application Support/(?:Google/Chrome|Chromium)|"
     r"\.mozilla/firefox|cookies\.sqlite|Login Data)",
+    re.IGNORECASE,
+)
+_CREDENTIAL_STORE_PATTERNS: Final = (
+    (re.compile(r"(?:~[/\\])?\.netrc\b|_netrc\b", re.IGNORECASE), "~/.netrc"),
+    (
+        re.compile(r"(?:~[/\\])?\.aws[/\\]credentials\b", re.IGNORECASE),
+        "~/.aws/credentials",
+    ),
+    (
+        re.compile(r"(?:~[/\\])?\.config[/\\]gh[/\\]hosts\.ya?ml\b", re.IGNORECASE),
+        "~/.config/gh/hosts.yml",
+    ),
+    (
+        re.compile(r"(?:~[/\\])?\.docker[/\\]config\.json\b", re.IGNORECASE),
+        "~/.docker/config.json",
+    ),
+    (
+        re.compile(r"(?:~[/\\])?\.curl_home\b", re.IGNORECASE),
+        "~/.curl_home",
+    ),
+    (
+        re.compile(r"(?<![A-Za-z0-9._-])cookies\.txt\b", re.IGNORECASE),
+        "cookies.txt",
+    ),
+    (
+        re.compile(
+            r"(?:~[/\\])?\.ssh[/\\](?P<name>id_[A-Za-z0-9_]+)(?![A-Za-z0-9_.])",
+            re.IGNORECASE,
+        ),
+        "",
+    ),
+)
+_CREDENTIAL_STORE = re.compile(
+    "|".join(pattern.pattern for pattern, _label in _CREDENTIAL_STORE_PATTERNS),
     re.IGNORECASE,
 )
 _SECRET_TO_NETWORK = re.compile(
@@ -519,6 +565,7 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         ),
     ),
     ("credential_access", _PROVIDER_SECRET),
+    ("credential_access", _CREDENTIAL_STORE),
     (
         "deployment_write",
         re.compile(
@@ -775,6 +822,7 @@ def inspect_claude_plugin_file(
         hits.extend(_github_release_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
+        hits.extend(_credential_store_hits(content))
         hits.extend(_secret_to_network_hits(content))
         hits.extend(_secret_to_prompt_hits(content))
     return tuple(hits)
@@ -1500,6 +1548,56 @@ def _browser_profile_hits(content: str) -> tuple[PluginHit, ...]:
             message=CLAUDE_PLUGIN_BROWSER_PROFILE_MESSAGE,
         ),
     )
+
+
+def _credential_store_label(match: re.Match[str], default_label: str) -> str:
+    """Return a path label for one host cookie or token store.
+
+    Args:
+        match: One credential-store regular-expression match.
+        default_label: Canonical path for non-SSH stores.
+
+    Returns:
+        A short path label with no secret values.
+    """
+    if default_label:
+        return default_label
+    return f"~/.ssh/{match.group('name').lower()}"
+
+
+def _credential_store_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return host cookie and token store findings from hook or manifest text.
+
+    ``~/.netrc``, cloud credentials, GitHub CLI hosts, Docker registry
+    auth, cookie jars, and SSH private keys fail closed. Chrome and
+    Firefox profile stores stay ``claude-plugin-browser-profile-access``.
+    Snippets are path labels, not secret values or raw bidi.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        Zero or more hits, one per distinct store path label.
+    """
+    hits: list[PluginHit] = []
+    seen: set[str] = set()
+    for pattern, label in _CREDENTIAL_STORE_PATTERNS:
+        for match in pattern.finditer(content):
+            snippet = _sanitize_plugin_snippet(
+                _credential_store_label(match, label)
+            )
+            if snippet in seen:
+                continue
+            seen.add(snippet)
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-credential-store-access",
+                    line=content[: match.start()].count("\n") + 1,
+                    snippet=snippet[:120],
+                    message=CLAUDE_PLUGIN_CREDENTIAL_STORE_MESSAGE,
+                )
+            )
+    return tuple(hits)
 
 
 def _secret_to_network_hits(content: str) -> tuple[PluginHit, ...]:

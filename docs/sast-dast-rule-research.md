@@ -76,7 +76,7 @@ files being scanned, then applies the union of relevant checks. Examples:
 - `java-jwt-none-algorithm`: JWT none algorithm marker.
 - `java-objectinputstream-deserialization`: direct Java native deserialization
   entry point, CWE-502.
-- `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-269/CWE-200/CWE-451/CWE-693 plugin
+- `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-269/CWE-200/CWE-451/CWE-522/CWE-693 plugin
   marketplace provenance, provider secrets, GitHub write tokens, GitHub merge
   and release CLI commands, Docker
   socket binds, secret-to-network flows, secret-to-prompt and secret-to-log
@@ -94,9 +94,14 @@ files being scanned, then applies the union of relevant checks. Examples:
   `sbom_sha256` of a deterministic CycloneDX 1.5 dependency document, and
   `claude-plugin-checksum-mismatch` when a first-party checksum file
   disagrees with artifact bytes on disk, `claude-plugin-github-merge-command`
-  for hook or manifest ``gh pr merge``, and
+  for hook or manifest ``gh pr merge``,
   `claude-plugin-github-release-command` for ``gh release``
-  create/upload/delete/edit. ``gh issue create``, ``gh pr review``, and
+  create/upload/delete/edit, and
+  `claude-plugin-credential-store-access` for host ``~/.netrc``,
+  ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
+  SSH private keys. Chrome/Firefox profile stores stay
+  `claude-plugin-browser-profile-access`. Hardcoded PATs stay
+  `claude-plugin-github-write-token`. ``gh issue create``, ``gh pr review``, and
   ``docker push`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
