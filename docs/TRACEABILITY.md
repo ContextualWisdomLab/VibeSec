@@ -47,6 +47,8 @@ For stored webhook/callback SSRF, trace separately:
 
 Current protected-branch evidence keeps those controls distinct: PR #924 supplies the fail-closed webhook storage boundary, and PR #910 supplies the packaged `python-stored-ssrf-webhook-url` detector plus focused regression corpus. Neither control expands the detector beyond its declared source/sink and flow contract.
 
+PR #1107 is a Proposed repair of both boundaries, not protected-branch evidence. Moving validation into the local `set_webhook` persistence function exposed a detector false positive: the route's request-derived variable was reported even though the unique top-level sink rejected unsafe input before SQLite use. The regression contract suppresses that finding only when the Python AST proves the local sink is unique, is not rebound, rejects a directly derived destination unconditionally, and uses that validated value only after the guard. An unrelated conditional guard or later `set_webhook` rebinding remains positive. PR #1068 remains the prerequisite for the stronger unresolved-DNS fail-closed runtime and detector contract; persistence-time validation alone does not establish delivery-time DNS-rebinding resistance.
+
 ## Standards/research
 
 Existing repository docs/doctoring/security evidence remain the bibliography/source-of-truth for standards such as SARIF, CycloneDX, GitHub security interfaces, and applicable OWASP/CWE classes. Material new detector classes should add authoritative standard/CWE/OWASP references and APA 7 citations in doctoring where research/standards materially drive implementation.
