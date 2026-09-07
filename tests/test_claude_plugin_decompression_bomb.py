@@ -115,6 +115,8 @@ def test_ratio_and_depth_constants_are_explicit() -> None:
     assert detector._MAX_ARCHIVE_NESTING_DEPTH == _MAX_DEPTH
     assert detector._ratio_is_bomb(_ZERO_UNCOMPRESSED, 46) is True
     assert detector._ratio_is_bomb(40, 42) is False
+    assert detector._ratio_is_bomb(0, 10) is False
+    assert detector._ratio_is_bomb(_ZERO_UNCOMPRESSED, 0) is True
     assert _MAX_RATIO > 1
     assert _MAX_DEPTH >= 1
 
@@ -353,3 +355,146 @@ def test_symlink_archive_is_skipped(tmp_path: Path) -> None:
     files = {hit.file for hit in hits if hit.rule_id == _BOMB_RULE}
     assert "link.zip" not in files
     assert "real.zip" in files
+    assert detector._inspect_archive_decompression_bombs(link, root) == ()
+    assert detector._inspect_archive_decompression_bombs(root, root) == ()
+    assert detector._inspect_archive_decompression_bombs(root / "LICENSE", root) == ()
+    assert detector._archive_kind_from_name("README") is None
+    assert (
+        detector._inspect_archive_bytes_decompression_bombs(
+            b"not-an-archive",
+            display_file="payload.zip",
+            member_name="notes.txt",
+            extract_root=root,
+            depth=1,
+        )
+        == ()
+    )
+
+
+def test_nested_archive_over_byte_budget_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A nested archive larger than the package byte budget is not extracted."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _licensed_plugin(tmp_path / "plugin")
+    inner_zip = _zip_bytes({".claude-plugin/plugin.json": _PLUGIN_JSON, "LICENSE": _LICENSE})
+    zip_archive = _write_zip(
+        root / "payload.zip", {"files.zip": inner_zip}, compress=zipfile.ZIP_STORED
+    )
+    inner_tar = io.BytesIO()
+    with tarfile.open(fileobj=inner_tar, mode="w") as archive:
+        info = tarfile.TarInfo(name="LICENSE")
+        info.size = len(_LICENSE)
+        archive.addfile(info, io.BytesIO(_LICENSE))
+    tar_archive = _write_tar(root / "payload.tar", {"files.tar": inner_tar.getvalue()})
+    monkeypatch.setattr(detector, "_MAX_PACKAGE_BYTES", 10)
+    zip_hits = inspect_claude_plugin_archive(zip_archive, root)
+    tar_hits = inspect_claude_plugin_archive(tar_archive, root)
+    assert any(hit.rule_id == _BOMB_RULE for hit in zip_hits)
+    assert any(hit.rule_id == _BOMB_RULE for hit in tar_hits)
+    assert not (root / "files.zip").exists()
+    assert not (root / "files.tar").exists()
+
+
+def test_nested_member_read_errors_fail_closed(tmp_path: Path, monkeypatch) -> None:
+    """Unreadable nested archive members fail closed instead of extracting."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _licensed_plugin(tmp_path / "plugin")
+    inner = _zip_bytes({".claude-plugin/plugin.json": _PLUGIN_JSON})
+    archive = _write_zip(root / "payload.zip", {"files.zip": inner}, compress=zipfile.ZIP_STORED)
+    original_zip = detector.zipfile.ZipFile
+
+    class BoomReadZip(zipfile.ZipFile):
+        def read(self, name, *args, **kwargs):
+            raise OSError("read")
+
+    monkeypatch.setattr(detector.zipfile, "ZipFile", BoomReadZip)
+    zip_hits = detector._inspect_archive_decompression_bombs(archive, root)
+    monkeypatch.setattr(detector.zipfile, "ZipFile", original_zip)
+    assert any(hit.rule_id == _BOMB_RULE for hit in zip_hits)
+
+    inner_tar = io.BytesIO()
+    with tarfile.open(fileobj=inner_tar, mode="w") as handle:
+        info = tarfile.TarInfo(name="LICENSE")
+        info.size = len(_LICENSE)
+        handle.addfile(info, io.BytesIO(_LICENSE))
+    tar_path = _write_tar(root / "nested.tar", {"files.tar": inner_tar.getvalue()})
+    original_open = detector.tarfile.open
+
+    def boom_extract(*args, **kwargs):
+        handle = original_open(*args, **kwargs)
+        def extractfile(_member):
+            raise tarfile.TarError("extract")
+        handle.extractfile = extractfile  # type: ignore[method-assign]
+        return handle
+
+    monkeypatch.setattr(detector.tarfile, "open", boom_extract)
+    tar_hits = detector._inspect_archive_decompression_bombs(tar_path, root)
+    assert any(hit.rule_id == _BOMB_RULE for hit in tar_hits)
+
+    def none_extract(*args, **kwargs):
+        handle = original_open(*args, **kwargs)
+        def extractfile(_member):
+            return None
+        handle.extractfile = extractfile  # type: ignore[method-assign]
+        return handle
+
+    monkeypatch.setattr(detector.tarfile, "open", none_extract)
+    none_hits = detector._inspect_archive_decompression_bombs(tar_path, root)
+    monkeypatch.setattr(detector.tarfile, "open", original_open)
+    assert all(hit.rule_id != _BOMB_RULE for hit in none_hits)
+
+
+def test_nested_bytes_open_failure_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    """A nested zip that cannot be reopened fails closed as this class."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    inner = _zip_bytes({".claude-plugin/plugin.json": _PLUGIN_JSON})
+    original = detector.zipfile.ZipFile
+
+    class BoomZip(zipfile.ZipFile):
+        def __init__(self, *args, **kwargs):
+            raise zipfile.BadZipFile("bad")
+
+    monkeypatch.setattr(detector.zipfile, "ZipFile", BoomZip)
+    hits = detector._inspect_archive_bytes_decompression_bombs(
+        inner,
+        display_file="payload.zip",
+        member_name="files.zip",
+        extract_root=tmp_path,
+        depth=1,
+    )
+    monkeypatch.setattr(detector.zipfile, "ZipFile", original)
+    assert any(hit.rule_id == _BOMB_RULE for hit in hits)
+
+
+def test_bomb_stat_errors_are_skipped(tmp_path: Path, monkeypatch) -> None:
+    """Unreadable archive paths are skipped rather than extracted."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _licensed_plugin(tmp_path / "plugin")
+    archive = _write_zip(root / "payload.zip", {"ok.txt": b"ok\n"})
+    original = Path.is_symlink
+
+    def boom_always(self: Path) -> bool:
+        if self.name == "payload.zip":
+            raise OSError("stat")
+        return original(self)
+
+    monkeypatch.setattr(Path, "is_symlink", boom_always)
+    assert detector._inspect_archive_decompression_bombs(archive, root) == ()
+
+    seen = {"n": 0}
+
+    def boom_after_walk(self: Path) -> bool:
+        if self.name == "payload.zip":
+            seen["n"] += 1
+            if seen["n"] > 1:
+                raise OSError("stat")
+        return original(self)
+
+    monkeypatch.setattr(Path, "is_symlink", boom_after_walk)
+    assert detector._decompression_bomb_hits(root) == ()
+    monkeypatch.setattr(Path, "is_symlink", original)

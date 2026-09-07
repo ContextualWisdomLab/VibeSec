@@ -101,3 +101,9 @@
   files fail as `claude-plugin-world-writable-executable`. A declared
   ``0755`` hook, world-writable LICENSE, vendored copies, Git metadata,
   and ``.mcp.json`` are not that class.
+  Zip or tar members whose uncompressed size divided by compressed size
+  exceeds 100, or nested archives deeper than one zip/tar layer, fail as
+  `claude-plugin-decompression-bomb` without extracting the payload.
+  Honest small zip/tar of plugin.json and LICENSE, ``../`` path
+  traversal, and oversized file-count or byte-count trees stay their
+  own classes.
