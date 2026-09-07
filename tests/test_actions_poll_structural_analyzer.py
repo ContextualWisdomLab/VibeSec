@@ -621,3 +621,103 @@ def test_one_line_fail_closed_deadline_guard_is_a_total_bound() -> None:
     assert item.exit_reachable is True
     assert item.is_transport_only_unbounded is False
 
+
+def test_coverage_edges_keep_causal_boundaries() -> None:
+    """Parser edges must not invent loops or donate non-causal safety."""
+    workflow = """
+name: Required review
+on: pull_request_target
+jobs: # mapping
+    ignored-before-first-job: true
+  review:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          echo \\x
+          echo "foo\\"bar"
+          echo 'unterminated
+          echo "unterminated
+          echo ${UNCLOSED
+          echo $(unclosed
+          echo $
+          broken=$((1+
+          nested="$(echo $(date +%s))"
+          cat <<EOF
+          while :; do gh api; done
+          EOF
+          cat <<"END"
+          while true; do gh api; done
+          END
+
+          flag=1
+          while [ -n "$flag" ]; do
+            gh api repos/example/repo
+            break
+          done
+          while :; do gh api repos/example/repo/pulls/1/reviews; sleep 1; done
+          done extra
+          fi
+          api_error_streak=0
+          transport_error_budget=4
+          while :; do
+            fi
+            if ! response="$(gh api repos/example/repo/pulls/7/reviews)"; then
+              echo transport-failed
+              continue
+            fi
+            if [ 1 -ge 2 ]; then
+              exit 1
+            fi
+            sleep 30
+          done
+"""
+    assessments = _polls(workflow)
+    jobs = {item.job_name for item in assessments}
+    assert "review" in jobs
+    assert all(item.job_name != "ignored-before-first-job" for item in assessments)
+    assert any(item.transport_failure_budget is False for item in assessments)
+
+
+def test_swapped_reversed_clock_operands_are_not_safety() -> None:
+    """deadline -gt now does not expire and cannot bound the poll."""
+    extra = '  if [ "$poll_deadline_epoch" -gt "$(date +%s)" ]; then\n    exit 1\n  fi'
+    shell = _renamed_transport_shell(
+        extra_before="poll_deadline_epoch=$(( $(date +%s) + 600 ))",
+        extra_in_loop=extra,
+    )
+
+    item = _polls(_workflow(shell))[0]
+
+    assert item.comparison_converges is False
+    assert item.is_transport_only_unbounded is True
+
+
+def test_reversed_attempt_comparison_is_not_a_total_bound() -> None:
+    """A -lt attempt comparison does not terminate when the counter grows."""
+    extra = '  poll_attempts=$((poll_attempts + 1))\n  if [ "$poll_attempts" -lt "$max_poll_attempts" ]; then\n    exit 1\n  fi'
+    shell = _renamed_transport_shell(
+        extra_before="poll_attempts=0\nmax_poll_attempts=12",
+        extra_in_loop=extra,
+    )
+
+    item = _polls(_workflow(shell))[0]
+
+    assert item.comparison_converges is False
+    assert item.is_transport_only_unbounded is True
+
+
+def test_then_without_if_and_le_deadline_remain_unbounded() -> None:
+    """A dangling then and a non-expiring -le clock guard are not safety."""
+    extra = '  then\n  if [ "$(date +%s)" -le "$poll_deadline_epoch" ]; then\n    exit 1\n  fi'
+    shell = _renamed_transport_shell(
+        extra_before="poll_deadline_epoch=$(( $(date +%s) + 600 ))",
+        extra_in_loop=extra,
+    )
+
+    item = _polls(_workflow(shell))[0]
+
+    assert item.comparison_converges is False
+    assert item.is_transport_only_unbounded is True
+
+
