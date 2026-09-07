@@ -50,7 +50,7 @@
 
 ## 2024-07-03 - Deduplicating lists of strings optimally
 **Learning:** Checking `if item not in list` for deduplicating strings requires linearly scanning the list for every item, creating $O(N^2)$ time complexity. This can cause bottlenecks if the list grows large. In modern Python (3.7+), standard dictionaries maintain insertion order.
-**Action:** Replace `if item not in list` iterations with `dict.fromkeys(iterator)` to leverage hash map lookups for $O(1)$ item deduplication, bringing overall complexity from $O(N^2)$ to O(N) while preserving insertion order.
+**Action:** Replace `if item not in list` iterations with `dict.fromkeys(iterator)` to leverage hash map lookups for $O(1)$ item deduplication, bringing overall complexity from $O(N^2)$ to $O(N)$ while preserving insertion order.
 
 ## 2024-07-08 - Path.relative_to overhead in file scanning loops
 **Learning:** Calling `pathlib.Path.relative_to()` inside nested loops (like per-match file scanning) is a massive performance bottleneck due to Pathlib's object instantiation and resolution overhead, far slower than raw string manipulations. Even deferred to the first match per file, string logic is significantly faster.
