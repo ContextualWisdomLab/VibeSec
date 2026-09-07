@@ -49,3 +49,10 @@
   surfaces fail as `claude-plugin-browser-profile-access`. A README path
   mention and a bare ``Firefox`` product name stay inventory, not that
   class. Docker sockets stay `claude-plugin-docker-socket`.
+  Plugin, skill, or command descriptions that claim innocuous, read-only,
+  or local-only behavior while the capability inventory shows write,
+  network egress, GitHub write, credential access, remote MCP, or shell
+  execution that the description denies fail as
+  `claude-plugin-deceptive-description`. An honest network mention, an
+  empty description, and a matching local echo helper are not that class.
+  Inventory remains evidence, not permission.

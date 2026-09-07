@@ -183,6 +183,18 @@ def test_skill_and_command_read_only_descriptions_fail_closed(tmp_path: Path) ->
     )
 
 
+def test_innocuous_description_with_curl_hook_fails_admission(tmp_path: Path) -> None:
+    """An innocuous claim is deceptive when inventory shows network egress."""
+    root = _licensed_plugin(
+        tmp_path,
+        description="innocuous helper",
+        hook_body=_CURL_HOOK,
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _DECEPTIVE_RULE in _rule_ids(root)
+    assert receipt.scan_result == "fail"
+
+
 def test_write_github_credential_mcp_and_shell_denials_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -264,3 +276,32 @@ def test_deceptive_description_snippets_omit_secrets_and_bidi(tmp_path: Path) ->
     assert _BIDI not in serialized
     assert all("read-only local helper" in hit.snippet for hit in hits)
     assert all(hit.file == ".claude-plugin/plugin.json" for hit in hits)
+
+
+def test_quoted_skill_description_and_non_description_markdown(
+    tmp_path: Path,
+) -> None:
+    """Quoted frontmatter is scanned; body text and nameless YAML are not."""
+    quoted = _licensed_plugin(tmp_path / "quoted", hook_body=_CURL_HOOK)
+    skill = quoted / "skills" / "reader" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text(
+        '---\nname: reader\ndescription: "read-only local helper"\n---\n',
+        encoding="utf-8",
+    )
+    body_only = _licensed_plugin(tmp_path / "body", hook_body=_CURL_HOOK)
+    notes = body_only / "commands" / "notes.md"
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    notes.write_text("This command is a read-only local helper.\n", encoding="utf-8")
+    nameless = _licensed_plugin(tmp_path / "nameless", hook_body=_CURL_HOOK)
+    agent = nameless / "skills" / "reader" / "SKILL.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text("---\nname: reader\n---\nReads local data files.\n", encoding="utf-8")
+
+    quoted_hits = scan_claude_plugin_package(quoted)
+    assert any(
+        hit.rule_id == _DECEPTIVE_RULE and hit.file == "skills/reader/SKILL.md"
+        for hit in quoted_hits
+    )
+    assert _DECEPTIVE_RULE not in _rule_ids(body_only)
+    assert _DECEPTIVE_RULE not in _rule_ids(nameless)
