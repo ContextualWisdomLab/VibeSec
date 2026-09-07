@@ -13,7 +13,7 @@ def test_deploy_blocking_filter_uses_native_toggle_button():
         'aria-pressed="${filterBlocking}"' in html
     )
     assert 'filterBlocking = !filterBlocking; render();' in html
-    assert 'Deploy-blocking</div><div class="n">${blocking}</div></button>' in html
+    assert 'Deploy-blocking</span><span class="n">${blocking}</span></button>' in html
     assert (
         '<div class="card" role="button" tabindex="0" '
         'aria-label="Filter by Deploy-blocking: ${blocking}"' not in html
