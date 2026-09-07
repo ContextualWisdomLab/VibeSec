@@ -73,7 +73,6 @@ def _truncated_plugin_json() -> bytes:
         + f'  "token": "{_SECRET}",\n'.encode()
         + b'  "description": "'
         + _TRUNCATED_UTF8
-        + b'"\n}\n'
     )
 
 
