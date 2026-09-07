@@ -124,3 +124,11 @@
   rows, and missing checksum files are not that class. Cosign or GPG
   network verification is not required. Snippets are path labels, not
   hashes or secrets. ``sbom_sha256`` stays the CycloneDX receipt digest.
+  Hook or manifest ``gh pr merge`` fails as
+  `claude-plugin-github-merge-command`. ``gh release create``,
+  ``upload``, ``delete``, or ``edit`` fails as
+  `claude-plugin-github-release-command`. ``gh issue create``,
+  ``gh pr review``, ``gh release list``, ``kubectl apply``, and
+  ``docker push`` stay inventory. Hardcoded PATs stay
+  `claude-plugin-github-write-token`. Snippets are command labels, not
+  tokens.

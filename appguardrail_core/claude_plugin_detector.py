@@ -6,7 +6,7 @@ unsigned executable download, package.json lifecycle download, unpinned
 package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, decompression bomb or nested-archive depth, unadmitted nested
-submodule, hardcoded GitHub write token, Docker
+submodule, hardcoded GitHub write token, GitHub merge or release CLI command, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, secret copied into a prompt, log, or subprocess environment,
 secret copied into MCP env or args,
@@ -18,7 +18,10 @@ description that denies inventoried write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
-not permission: presence of a capability is not a finding by itself. Skill
+not permission, except that hook or manifest ``gh pr merge`` and
+``gh release create|upload|delete|edit`` fail closed as command findings.
+``gh issue create``, ``gh pr review``, ``kubectl apply``, and
+``docker push`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -202,6 +205,16 @@ CLAUDE_PLUGIN_GITHUB_WRITE_TOKEN_MESSAGE: Final = (
     "That token is write-capable authority. Remove it and use the host secret "
     "store. [CWE-798 - Use of Hard-coded Credentials]"
 )
+CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs GitHub CLI merge. Merging a pull "
+    "request is write authority on the default branch. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs GitHub CLI release create, upload, "
+    "delete, or edit. Publishing a release is write authority. Remove the "
+    "command. [CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -305,6 +318,11 @@ _PIPE_TO_SHELL = re.compile(
 )
 _GITHUB_TOKEN = re.compile(
     r"\b(?P<prefix>ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}\b"
+)
+_GITHUB_MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b", re.IGNORECASE)
+_GITHUB_RELEASE_COMMAND = re.compile(
+    r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)\b",
+    re.IGNORECASE,
 )
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
@@ -753,6 +771,8 @@ def inspect_claude_plugin_file(
         hits.extend(_package_lifecycle_hits(content))
     if manifest or hook_surface:
         hits.extend(_github_write_token_hits(content))
+        hits.extend(_github_merge_command_hits(content))
+        hits.extend(_github_release_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_secret_to_network_hits(content))
@@ -1371,6 +1391,53 @@ def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=prefix,
             message=CLAUDE_PLUGIN_GITHUB_WRITE_TOKEN_MESSAGE,
+        ),
+    )
+
+
+def _github_merge_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``gh pr merge`` findings with a command label, not tokens.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit when the merge CLI is present. Empty when the text only
+        lists, views, or reviews pull requests.
+    """
+    match = _GITHUB_MERGE_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-github-merge-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="gh pr merge",
+            message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _github_release_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return GitHub CLI release write-verb findings without secret bodies.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for ``create``, ``upload``, ``delete``, or ``edit``.
+        ``gh release list`` and ``gh release view`` are not this class.
+    """
+    match = _GITHUB_RELEASE_COMMAND.search(content)
+    if match is None:
+        return ()
+    verb = match.group("verb").lower()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-github-release-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=f"gh release {verb}",
+            message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
         ),
     )
 
