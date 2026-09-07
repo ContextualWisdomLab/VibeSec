@@ -8,7 +8,7 @@ import appguardrail_core
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "scan-path-context-coverage.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 DOCUMENTATION = ROOT / "docs" / "scanner-path-context.md"
 CHANGELOG = ROOT / "CHANGELOG.d" / "893-scan-path-context.md"
 
@@ -29,7 +29,7 @@ def test_exact_coverage_workflow_is_least_privilege_and_complete() -> None:
     assert "push:" in workflow
     assert "permissions:\n  contents: read" in workflow
     assert "persist-credentials: false" in workflow
-    assert "python-version: '3.13'" in workflow
+    assert "python-version: ['3.11', '3.13']" in workflow
     assert "appguardrail_core/scan_paths.py" in workflow
     for test_name in (
         "test_scan_path_context_core.py",

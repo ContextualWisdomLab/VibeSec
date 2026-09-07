@@ -8,7 +8,7 @@ import appguardrail_core
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "pinned-https-coverage.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 DOCUMENTATION = ROOT / "docs" / "pinned-https-control-plane-delivery.md"
 CHANGELOG = ROOT / "CHANGELOG.d" / "892-pinned-control-plane-delivery.md"
 
@@ -37,7 +37,7 @@ def test_pinned_https_workflow_enforces_exact_read_only_coverage() -> None:
     assert "pull_request:" in workflow
     assert "push:" in workflow
     assert "permissions:\n  contents: read" in workflow
-    assert "python-version: '3.13'" in workflow
+    assert "python-version: ['3.11', '3.13']" in workflow
     assert "persist-credentials: false" in workflow
     assert "appguardrail_core/pinned_https.py" in workflow
     for test_name in (

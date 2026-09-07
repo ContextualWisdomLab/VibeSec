@@ -108,7 +108,7 @@ def test_package_metadata_matches_the_tested_python_floor() -> None:
 def test_exact_coverage_workflow_tracks_every_openssf_test_surface() -> None:
     """New production code must retain an exact unrounded 100% coverage gate."""
     workflow = (
-        ROOT / ".github" / "workflows" / "openssf-evidence-coverage.yml"
+        ROOT / ".github" / "workflows" / "tests.yml"
     ).read_text(encoding="utf-8")
 
     assert "appguardrail_core/__init__.py" in workflow

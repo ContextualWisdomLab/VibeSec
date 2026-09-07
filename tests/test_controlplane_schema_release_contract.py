@@ -63,7 +63,7 @@ def test_public_exports_list_every_schema_migration_symbol() -> None:
 def test_exact_coverage_workflow_is_least_privilege_and_complete() -> None:
     """Schema production statements are gated by all dedicated contract tests."""
     workflow = (
-        ROOT / ".github" / "workflows" / "controlplane-schema-coverage.yml"
+        ROOT / ".github" / "workflows" / "tests.yml"
     ).read_text(encoding="utf-8")
 
     assert "permissions:\n  contents: read" in workflow

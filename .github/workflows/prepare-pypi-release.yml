@@ -215,7 +215,7 @@ jobs:
 
       - name: Clean local release artifacts
         run: |
-          rm -rf build dist *.egg-info release-sbom.cdx.json release-provenance.json
+          rm -rf -- build dist ./*.egg-info release-sbom.cdx.json release-provenance.json
 
       - name: Commit and push release branch
         run: |

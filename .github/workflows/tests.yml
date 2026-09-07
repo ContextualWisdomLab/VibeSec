@@ -4,13 +4,19 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [develop, main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pytest:
+    if: ${{ github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false) }}
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
@@ -48,3 +54,56 @@ jobs:
             --test tests/test_code_scanning_page_result_issue_index.py \
             --test tests/test_code_scanning_remaining_coverage.py \
             --test tests/test_code_scanning_review_regressions.py
+      - name: Verify consolidated exact module coverage
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m scripts.ci.verify_module_coverage \
+            --module scripts/ci/commercial_readiness_loop.py \
+            --module scripts/ci/commercial_readiness_reconcile.py \
+            --test tests/test_commercial_readiness_loop.py \
+            --test tests/test_commercial_readiness_loop_handoff.py \
+            --test tests/test_commercial_readiness_reconcile.py \
+            --test tests/test_commercial_readiness_coverage_edges.py \
+            --test tests/test_opencode_commercial_agent_trust_boundary.py \
+            --test tests/test_opencode_commercial_agent_coverage_contract.py
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/controlplane_schema.py \
+            --test tests/test_controlplane_schema_migration.py \
+            --test tests/test_controlplane_schema_failure_edges.py \
+            --test tests/test_controlplane_schema_contract.py \
+            --test tests/test_controlplane_schema_coverage_edges.py \
+            --test tests/test_controlplane_schema_release_contract.py
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/__init__.py \
+            --module appguardrail_core/openssf_evidence.py \
+            --module appguardrail_core/openssf_report.py \
+            --test tests/test_openssf_evidence.py \
+            --test tests/test_openssf_evidence_transport.py \
+            --test tests/test_openssf_evidence_cli.py \
+            --test tests/test_openssf_evidence_report.py \
+            --test tests/test_openssf_evidence_release_contract.py \
+            --test tests/test_openssf_evidence_coverage_edges.py \
+            --test tests/test_openssf_evidence_validation_edges.py
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/pinned_https.py \
+            --test tests/test_pinned_https_resolution.py \
+            --test tests/test_pinned_https_redirects.py \
+            --test tests/test_pinned_https_cli_integration.py \
+            --test tests/test_pinned_https_validation_edges.py \
+            --test tests/test_pinned_https_coverage_edges.py \
+            --test tests/test_pinned_https_release_contract.py
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/audit_events.py \
+            --module appguardrail_core/retention_policy.py \
+            --test tests/test_audit_events.py \
+            --test tests/test_audit_checkpoint_edges.py \
+            --test tests/test_retention_policy.py \
+            --test tests/test_retention_policy_edges.py \
+            --test tests/test_retention_audit_release_contract.py \
+            --test tests/test_module_coverage_gate_contract.py
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/scan_paths.py \
+            --test tests/test_scan_path_context_core.py \
+            --test tests/test_scan_path_context_integration.py \
+            --test tests/test_auth_deferral_comment_rule.py \
+            --test tests/test_scan_path_context_release_contract.py

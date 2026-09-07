@@ -6,13 +6,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_PATH = (
-    ROOT / ".github" / "workflows" / "commercial-readiness-agent-coverage.yml"
-)
+WORKFLOW_PATH = ROOT / ".github" / "workflows" / "tests.yml"
 
 
-def test_coverage_workflow_tracks_every_changed_agent_surface() -> None:
-    """The exact gate reruns when production, tests, docs, config, or workflow change."""
+def test_coverage_workflow_tracks_every_agent_test_surface() -> None:
+    """The consolidated exact gate retains every commercial-agent test."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     required_paths = (
@@ -24,15 +22,8 @@ def test_coverage_workflow_tracks_every_changed_agent_surface() -> None:
         "tests/test_commercial_readiness_coverage_edges.py",
         "tests/test_opencode_commercial_agent_trust_boundary.py",
         "tests/test_opencode_commercial_agent_coverage_contract.py",
-        "docs/commercial-readiness-loop.md",
-        "docs/opencode-commercial-readiness-agent.md",
-        "docs/superpowers/plans/2026-08-06-opencode-commercial-readiness-agent.md",
-        "CHANGELOG.d/872-opencode-commercial-agent.md",
-        "opencode.jsonc",
-        ".github/workflows/commercial-readiness-loop.yml",
-        ".github/workflows/commercial-readiness-agent-coverage.yml",
     )
-    assert all(workflow.count(f'      - "{path}"') == 2 for path in required_paths)
+    assert all(path in workflow for path in required_paths)
 
 
 def test_coverage_workflow_runs_focused_tests_and_both_modules() -> None:

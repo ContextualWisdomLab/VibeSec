@@ -85,11 +85,11 @@ def test_changelog_fragment_names_buyer_visible_governance_evidence() -> None:
 def test_exact_coverage_workflow_tracks_every_core_surface() -> None:
     """The new production modules remain behind exact unrounded coverage evidence."""
     workflow = (
-        ROOT / ".github" / "workflows" / "retention-audit-coverage.yml"
+        ROOT / ".github" / "workflows" / "tests.yml"
     ).read_text(encoding="utf-8")
 
     assert "permissions:\n  contents: read" in workflow
-    assert "cancel-in-progress: true" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
     assert "appguardrail_core/audit_events.py" in workflow
     assert "appguardrail_core/retention_policy.py" in workflow
     assert "tests/test_audit_events.py" in workflow
