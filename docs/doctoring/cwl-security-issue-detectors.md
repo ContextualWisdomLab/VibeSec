@@ -16,7 +16,7 @@ every frozen family. It implements only the unique families it owns.
 |---|---|---|---|---|
 | Transport-only Actions polling | SAST | #1087, #938 | PR #1088 / issue #1087 | maps only |
 | Secret indirection / auth comments | SAST | #1106 | this successor | implements regression lock on existing `_scan_file` rules, including LifeOS #247 test-title/authority wording |
-| Claude plugin supply chain | SAST | #1099 | this successor | implements `claude-plugin-*` findings including unsigned executable downloads from hooks and package.json lifecycle scripts, unpinned package URL installs, GitHub write tokens, Docker socket binds, host browser-profile stores, deceptive plugin/skill/command descriptions, non-standard JSON constants, malformed UTF-8 JSON bytes, non-NFC identity names, undeclared vendored or generated code scope, conflicting plugin/skill/command identities, secret-to-network flows, secret-to-prompt, log, or subprocess-env copies, and secrets copied into MCP env/args, reuses released #1036 skill-supply-chain rule identities on plugin skill/agent/command surfaces, capability inventory evidence, undeclared-executable admission, LICENSE/NOTICE SPDX mismatch, dynamic eval/exec on hook surfaces, hidden undeclared executable/config surfaces, a secret-free scan receipt with catalog repository/SHA bind and SARIF 2.1.0 `sarif_sha256` bound to the same finding rule_ids, and fail-closed stale/mismatched receipt verification |
+| Claude plugin supply chain | SAST | #1099 | this successor | implements `claude-plugin-*` findings including unsigned executable downloads from hooks and package.json lifecycle scripts, unpinned package URL installs, GitHub write tokens, Docker socket binds, host browser-profile stores, deceptive plugin/skill/command descriptions, non-standard JSON constants, malformed UTF-8 JSON bytes, non-NFC identity names, undeclared vendored or generated code scope, conflicting plugin/skill/command identities, secret-to-network flows, secret-to-prompt, log, or subprocess-env copies, and secrets copied into MCP env/args, hide-actions / self-modify / goal-escalation wording on skill/command/agent surfaces, reuses released #1036 skill-supply-chain rule identities on plugin skill/agent/command surfaces, capability inventory evidence, undeclared-executable admission, LICENSE/NOTICE SPDX mismatch, dynamic eval/exec on hook surfaces, hidden undeclared executable/config surfaces, a secret-free scan receipt with catalog repository/SHA bind and SARIF 2.1.0 `sarif_sha256` bound to the same finding rule_ids, and fail-closed stale/mismatched receipt verification |
 | Orphaned Actions workflows | DAST | #929 | PR #966 / issue #929 | maps only |
 | Org CI failure without evidence | non-detectable | 353 tickets | inventory snapshot | maps only |
 | UX / control-plane product gaps | non-detectable | #871, #928 | out of SAST/DAST scope | maps only |
@@ -27,7 +27,9 @@ every frozen family. It implements only the unique families it owns.
 Uncontrolled CI wait is CWE-400 resource consumption (MITRE, n.d.-a). Hard-coded
 credentials are CWE-798 (MITRE, n.d.-b). Unsigned installer execution is CWE-494
 (MITRE, n.d.-c). Symlink follow during package admission is CWE-59 (MITRE,
-n.d.-d). GitHub Actions workflow identities persist after file deletion
+n.d.-d). Concealing tool use from the user is CWE-451 (MITRE, n.d.-e).
+Rewriting a system prompt or escalating the declared goal is CWE-693
+(MITRE, n.d.-f). GitHub Actions workflow identities persist after file deletion
 and must be disabled through the lifecycle API (GitHub, n.d.). Those last two
 workflow families remain owned by PRs #1088 and #966.
 
@@ -42,6 +44,7 @@ workflow families remain owned by PRs #1088 and #966.
 - `tests/test_claude_plugin_conflicting_identity.py`
 - `tests/test_claude_plugin_secret_to_prompt.py`
 - `tests/test_claude_plugin_secret_to_mcp.py`
+- `tests/test_claude_plugin_hide_actions.py`
 - `tests/test_password_indirection_precision.py`
 - `tests/test_cwl_security_issue_inventory.py`
 - `tests/fixtures/cwl-security-issue-inventory.json`
@@ -66,3 +69,9 @@ https://cwe.mitre.org/data/definitions/494.html
 
 MITRE. (n.d.-d). *CWE-59: Improper link resolution before file access*.
 https://cwe.mitre.org/data/definitions/59.html
+
+MITRE. (n.d.-e). *CWE-451: User interface (UI) misrepresentation of critical
+information*. https://cwe.mitre.org/data/definitions/451.html
+
+MITRE. (n.d.-f). *CWE-693: Protection mechanism failure*.
+https://cwe.mitre.org/data/definitions/693.html

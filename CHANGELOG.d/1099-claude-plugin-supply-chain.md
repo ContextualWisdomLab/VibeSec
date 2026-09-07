@@ -89,3 +89,10 @@
   `claude-plugin-secret-to-mcp`. Curl copies stay
   `claude-plugin-secret-to-network`. Prompt and log copies stay
   `claude-plugin-secret-to-prompt`. Snippets are the env name only.
+  Skill, command, or agent text that hides tool use, rewrites the system
+  prompt, or expands the declared goal fails as
+  `claude-plugin-hide-actions-directive`,
+  `claude-plugin-self-modify-directive`, or
+  `claude-plugin-goal-escalation-directive`. Honest ``report each tool
+  call to the user`` wording, README prose, and vendored copies are not
+  that class. #1036 injection and exfil identities stay on their rules.
