@@ -86,8 +86,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   reused #1036 skill-supply-chain identities on
   plugin skill/agent/command surfaces, hide-actions / self-modify /
   goal-escalation instruction wording on those surfaces, setuid/setgid or
-  world-writable executable and hook modes, zip/tar decompression bombs
-  and nested-archive depth, and fail-closed
+  world-writable executable and hook modes, zip/tar decompression bombs,
+  nested-archive depth, and pre-extraction aggregate byte budget, and fail-closed
   replay of a stale or mismatched scan receipt.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).

@@ -150,8 +150,10 @@ CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
     "[CWE-400 - Uncontrolled Resource Consumption]"
 )
 CLAUDE_PLUGIN_DECOMPRESSION_BOMB_MESSAGE: Final = (
-    "Claude plugin archive member expands far beyond its compressed size "
-    "or nests archives beyond the bounded depth. Do not extract the payload. "
+    "Claude plugin archive member expands far beyond its compressed size, "
+    "nests archives beyond the bounded depth, or the archive's total "
+    "uncompressed regular-member bytes exceed the package budget. Do not "
+    "extract the payload. "
     "[CWE-409 - Improper Handling of Highly Compressed Data (Data Amplification)]"
 )
 CLAUDE_PLUGIN_SETUID_EXECUTABLE_MESSAGE: Final = (
@@ -889,10 +891,12 @@ def inspect_claude_plugin_archive(
     Members whose names leave the extract root (``../``, absolute POSIX
     paths, Windows drive or UNC prefixes) are findings and are never
     written. Members whose uncompressed size divided by compressed size
-    exceeds ``_MAX_ARCHIVE_COMPRESSION_RATIO``, or nested archives deeper
-    than ``_MAX_ARCHIVE_NESTING_DEPTH``, are decompression-bomb findings
-    and are never written. Safe members are materialized under
-    ``extract_root``. Snippets record a sanitized member-path label only.
+    exceeds ``_MAX_ARCHIVE_COMPRESSION_RATIO``, nested archives deeper
+    than ``_MAX_ARCHIVE_NESTING_DEPTH``, or archives whose regular
+    in-root members sum above ``_MAX_PACKAGE_BYTES`` are
+    decompression-bomb findings and are never written. Safe members are
+    materialized under ``extract_root``. Snippets record a sanitized
+    member-path label only.
 
     Args:
         archive_path: Regular zip or tar file.
@@ -900,14 +904,15 @@ def inspect_claude_plugin_archive(
 
     Returns:
         Path-traversal and decompression-bomb hits. Empty when every
-        member stays inside the root, stays within the ratio/depth
+        member stays inside the root, stays within the ratio/depth/byte
         bounds, or ``archive_path`` is not a readable archive. Secret
         literals and raw archive bytes never appear in snippets.
     """
     hits, safe_members = _classify_archive_members(archive_path, extract_root)
     bomb_hits = _inspect_archive_decompression_bombs(archive_path, extract_root)
-    if bomb_hits:
-        return (*hits, *bomb_hits)
+    budget_hits = _archive_aggregate_budget_hits(archive_path, extract_root)
+    if bomb_hits or budget_hits:
+        return (*hits, *bomb_hits, *budget_hits)
     for name in safe_members:
         _extract_archive_member(archive_path, name, extract_root)
     return hits
@@ -2909,6 +2914,73 @@ def _archive_member_names(archive_path: Path) -> tuple[tuple[str, ...], bool]:
     except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
         return (), False
     return (), False
+
+
+def _archive_aggregate_budget_hits(
+    archive_path: Path, extract_root: Path
+) -> tuple[PluginHit, ...]:
+    """Return a bomb finding when in-root regular members exceed the byte budget.
+
+    Uses archive metadata only (zip ``ZipInfo.file_size``, tar regular
+    ``TarInfo.size``). Traversal members and directories are omitted.
+    Payload bytes are not read or written.
+
+    Args:
+        archive_path: Candidate zip or tar file.
+        extract_root: Bounded destination root used to exclude escapes.
+
+    Returns:
+        One decompression-bomb hit when the summed uncompressed size of
+        regular in-root members is greater than ``_MAX_PACKAGE_BYTES``.
+        Empty when the archive is unreadable, not an archive, or the
+        total stays within budget.
+    """
+    total = _archive_regular_in_root_bytes(archive_path, extract_root)
+    if total is None or total <= _MAX_PACKAGE_BYTES:
+        return ()
+    relative = _archive_display_path(archive_path, extract_root)
+    return (_decompression_bomb_hit(relative, archive_path.name),)
+
+
+def _archive_regular_in_root_bytes(
+    archive_path: Path, extract_root: Path
+) -> int | None:
+    """Return summed uncompressed bytes of regular in-root members.
+
+    Args:
+        archive_path: Candidate zip or tar file.
+        extract_root: Bounded destination root used to exclude escapes.
+
+    Returns:
+        Non-negative byte total, or ``None`` when the archive cannot be
+        read as zip/tar metadata. Directories and escaping names are
+        skipped. Payload contents are not read.
+    """
+    kind = _archive_kind_from_name(archive_path.name)
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(archive_path) as archive:
+                total = 0
+                for info in archive.infolist():
+                    if _zip_member_is_dir(info):
+                        continue
+                    if _archive_member_escapes(info.filename, extract_root):
+                        continue
+                    total += info.file_size
+                return total
+        if kind == "tar":
+            with tarfile.open(archive_path) as archive:
+                total = 0
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    if _archive_member_escapes(member.name, extract_root):
+                        continue
+                    total += member.size
+                return total
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return None
+    return 0
 
 
 def _classify_archive_members(
