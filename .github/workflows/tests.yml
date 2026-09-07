@@ -65,7 +65,8 @@ jobs:
             --test tests/test_claude_plugin_malformed_utf8.py \
             --test tests/test_claude_plugin_normalized_name.py \
             --test tests/test_claude_plugin_vendored_scope.py \
-            --test tests/test_claude_plugin_conflicting_identity.py
+            --test tests/test_claude_plugin_conflicting_identity.py \
+            --test tests/test_claude_plugin_secret_to_prompt.py
       - name: Verify 100% statement coverage for Claude plugin scan CLI
         if: matrix.python-version == '3.13'
         run: |
