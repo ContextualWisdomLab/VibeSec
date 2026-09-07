@@ -194,6 +194,24 @@ def test_declared_hidden_path_is_not_this_finding(tmp_path: Path) -> None:
     assert _HIDDEN_RULE not in rule_ids
 
 
+def test_nested_manifest_and_gitlink_are_not_hidden_findings(tmp_path: Path) -> None:
+    """Nested plugin.json and gitlink ``.git`` files are not this class."""
+    root = _licensed_plugin(tmp_path)
+    nested = root / "vendor" / "nested"
+    _write_json(
+        nested / ".claude-plugin" / "plugin.json",
+        {
+            "name": "nested",
+            "version": "1.0.0",
+            "source": {"ref": _PINNED_COMMIT},
+        },
+    )
+    (nested / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    (nested / ".git").write_text("gitdir: ../../.git/modules/vendor/nested\n", encoding="utf-8")
+    rule_ids = _rule_ids(root)
+    assert _HIDDEN_RULE not in rule_ids
+
+
 def test_dynamic_eval_on_declared_hook_is_unchanged(tmp_path: Path) -> None:
     """#1145 eval/exec on a declared hook is not this hidden-path class."""
     root = _licensed_plugin(
