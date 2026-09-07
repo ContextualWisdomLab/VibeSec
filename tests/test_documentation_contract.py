@@ -33,6 +33,7 @@ GOVERNING_ADRS = (
     "0004-tenant-network-boundaries.md",
     "0005-remediation-authority.md",
     "0006-automation-authority.md",
+    "0007-cwl-security-issue-detector-families.md",
 )
 
 
@@ -213,3 +214,18 @@ def test_adr_index_contains_governing_detector_decisions() -> None:
         adr_path = ROOT / "docs" / "adr" / adr
         assert adr_path.is_file(), f"ADR file is missing: {adr}"
         assert f"]({adr})" in index, f"ADR index does not link {adr}"
+
+
+def test_adr_0007_stays_proposed_until_protected_merge() -> None:
+    """Family-mapping ADR must not be Accepted on this successor branch."""
+
+    adr = _read("docs/adr/0007-cwl-security-issue-detector-families.md")
+    index_row = _single_line_with(
+        _read("docs/adr/README.md"),
+        "0007-cwl-security-issue-detector-families.md",
+        "Proposed",
+    )
+    assert "**Status:** Proposed" in adr
+    assert "**Status:** Accepted" not in adr
+    assert "Proposed" in index_row
+    assert "Accepted" not in index_row

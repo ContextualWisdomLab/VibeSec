@@ -1,0 +1,23 @@
+name: OpenCode Review
+on: pull_request
+jobs:
+  wait:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll verdict
+        run: |
+          max_poll_transport_failures=8
+          transport_failures=0
+          while true; do
+            if gh api "/repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs"; then
+              transport_failures=0
+              echo "no verdict yet"
+            else
+              transport_failures=$((transport_failures + 1))
+              if [ "$transport_failures" -ge "$max_poll_transport_failures" ]; then
+                echo "transport failed"
+                exit 1
+              fi
+            fi
+            sleep 30
+          done
