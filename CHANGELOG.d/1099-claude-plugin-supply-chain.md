@@ -12,5 +12,7 @@
   receipt binds `capability_inventory_sha256` over canonical JSON without
   secret literals. Undeclared executable surfaces that appear after manifest
   inventory fail admission. `pass` means the exact tree satisfied the exact
-  AppGuardrail policy, not activation. `.claude-plugin/` is included in the
-  scan walk.
+  AppGuardrail policy, not activation. Retained receipts fail closed on a
+  wrong artifact digest, wrong scanner policy digest, stale catalog, source,
+  or marketplace identity, or replay against mutated bytes; verification is
+  not Noema admission. `.claude-plugin/` is included in the scan walk.
