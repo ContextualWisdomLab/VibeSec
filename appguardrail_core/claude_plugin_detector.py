@@ -2,9 +2,10 @@
 
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
-undeclared hook, archive path escape, or unadmitted nested submodule is a
-policy finding. Capability inventory is evidence, not permission: presence
-of a capability is not a finding by itself.
+undeclared hook, archive path escape, unadmitted nested submodule, hardcoded
+GitHub write token, Docker socket bind, or secret copied into a network
+request is a policy finding. Capability inventory is evidence, not
+permission: presence of a capability is not a finding by itself.
 """
 
 from __future__ import annotations
@@ -87,6 +88,21 @@ CLAUDE_PLUGIN_UNADMITTED_SUBMODULE_MESSAGE: Final = (
     "package before admission. "
     "[CWE-494 - Download of Code Without Integrity Check]"
 )
+CLAUDE_PLUGIN_GITHUB_WRITE_TOKEN_MESSAGE: Final = (
+    "Claude plugin package contains a hardcoded GitHub personal or app token. "
+    "That token is write-capable authority. Remove it and use the host secret "
+    "store. [CWE-798 - Use of Hard-coded Credentials]"
+)
+CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
+    "Claude plugin hook reaches the host Docker socket. Socket access is host "
+    "control, not an image push. Remove the socket bind and keep builds "
+    "isolated. [CWE-250 - Execution with Unnecessary Privileges]"
+)
+CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
+    "Claude plugin hook copies a named secret into a network request. Keep "
+    "credentials out of curl, wget, and fetch payloads. "
+    "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
@@ -105,6 +121,20 @@ _PROVIDER_SECRET = re.compile(
 )
 _PIPE_TO_SHELL = re.compile(
     r"(?:curl|wget)\b[^\n]*\|\s*(?:bash|sh|zsh)\b",
+    re.IGNORECASE,
+)
+_GITHUB_TOKEN = re.compile(
+    r"\b(?P<prefix>ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}\b"
+)
+_DOCKER_SOCKET = re.compile(
+    r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
+    re.IGNORECASE,
+)
+_SECRET_TO_NETWORK = re.compile(
+    r"(?:curl|wget|fetch)\b[^\n]*\$(?:\{)?(?P<name>"
+    r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
+    r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
+    r"AWS_SECRET_ACCESS_KEY)(?:\})?",
     re.IGNORECASE,
 )
 _EXECUTABLE_SUFFIXES = frozenset(
@@ -175,7 +205,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
     (
         "github_write",
         re.compile(
-            r"\bgh\s+(?:issue\s+create|pr\s+create|repo\s+create)\b",
+            r"\bgh\s+(?:issue\s+create|pr\s+create|repo\s+create)\b|"
+            r"\b(?:ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}\b",
             re.IGNORECASE,
         ),
     ),
@@ -349,6 +380,9 @@ def inspect_claude_plugin_file(
                 message=CLAUDE_PLUGIN_PIPE_TO_SHELL_MESSAGE,
             )
         )
+    hits.extend(_github_write_token_hits(content))
+    hits.extend(_docker_socket_hits(content))
+    hits.extend(_secret_to_network_hits(content))
     return tuple(hits)
 
 
@@ -703,6 +737,59 @@ def _is_hook_surface(filename: str, posix: str) -> bool:
         return False
     suffix = Path(filename).suffix.lower()
     return suffix in _EXECUTABLE_SUFFIXES or suffix == ""
+
+
+def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return hardcoded GitHub PAT or app-token findings without secret bodies."""
+    match = _GITHUB_TOKEN.search(content)
+    if match is None:
+        return ()
+    prefix = match.group("prefix")
+    return (
+        PluginHit(
+            rule_id="claude-plugin-github-write-token",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=prefix,
+            message=CLAUDE_PLUGIN_GITHUB_WRITE_TOKEN_MESSAGE,
+        ),
+    )
+
+
+def _docker_socket_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return host Docker-socket findings from hook or manifest text."""
+    match = _DOCKER_SOCKET.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-docker-socket",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=match.group(0)[:120],
+            message=CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE,
+        ),
+    )
+
+
+def _secret_to_network_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return findings when a named secret is copied into a network client."""
+    match = _SECRET_TO_NETWORK.search(content)
+    if match is None:
+        return ()
+    name = match.group("name")
+    client = "curl"
+    lowered = match.group(0).lower()
+    if lowered.startswith("wget"):
+        client = "wget"
+    elif lowered.startswith("fetch"):
+        client = "fetch"
+    return (
+        PluginHit(
+            rule_id="claude-plugin-secret-to-network",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=f"{client} ${name}"[:120],
+            message=CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE,
+        ),
+    )
 
 
 def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:

@@ -76,9 +76,11 @@ files being scanned, then applies the union of relevant checks. Examples:
 - `java-jwt-none-algorithm`: JWT none algorithm marker.
 - `java-objectinputstream-deserialization`: direct Java native deserialization
   entry point, CWE-502.
-- `claude-plugin-*`: CWE-494/CWE-798/CWE-829 plugin marketplace provenance,
-  provider secrets, pipe-to-shell installers, undeclared executables, and
-  fail-closed replay of a stale or mismatched scan receipt.
+- `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-200 plugin
+  marketplace provenance, provider secrets, GitHub write tokens, Docker
+  socket binds, secret-to-network flows, pipe-to-shell installers,
+  undeclared executables, and fail-closed replay of a stale or mismatched
+  scan receipt.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
