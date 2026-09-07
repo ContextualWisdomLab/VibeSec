@@ -1,19 +1,24 @@
 """Static analysis for Claude plugin marketplace entries and package trees.
 
 Findings come from parsed manifests and executable surfaces, not from issue
-titles. A floating Git ref, provider secret, pipe-to-shell installer, or
-undeclared hook is a policy finding. Capability inventory is evidence, not
-permission: presence of a capability is not a finding by itself.
+titles. A floating Git ref, provider secret, pipe-to-shell installer,
+undeclared hook, archive path escape, or unadmitted nested submodule is a
+policy finding. Capability inventory is evidence, not permission: presence
+of a capability is not a finding by itself.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import configparser
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import tarfile
 from typing import Final, Iterable
+import zipfile
 
 
 CLAUDE_PLUGIN_FLOATING_REF_MESSAGE: Final = (
@@ -71,6 +76,17 @@ CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE: Final = (
     "ref, repository, or source path. Bind admission to one exact object. "
     "[CWE-494 - Download of Code Without Integrity Check]"
 )
+CLAUDE_PLUGIN_ARCHIVE_PATH_TRAVERSAL_MESSAGE: Final = (
+    "Claude plugin archive contains a member that escapes the extract root. "
+    "Do not follow ../, absolute, or Windows-prefix paths. "
+    "[CWE-22 - Improper Limitation of a Pathname to a Restricted Directory]"
+)
+CLAUDE_PLUGIN_UNADMITTED_SUBMODULE_MESSAGE: Final = (
+    "Claude plugin nested submodule, gitlink, or .gitmodules pointer lacks a "
+    "recursively admitted immutable SHA identity. Pin and scan the nested "
+    "package before admission. "
+    "[CWE-494 - Download of Code Without Integrity Check]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
@@ -81,6 +97,8 @@ _SCANNER_NAME: Final = "appguardrail"
 _SCANNER_VERSION: Final = "0.1.1"
 
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
+_ARCHIVE_SUFFIXES: Final = (".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz")
 _PROVIDER_SECRET = re.compile(
     r"\b(?:OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
     r"OPENROUTER_API_KEY)\b"
@@ -341,9 +359,10 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         root: Scan root that may contain ``.claude-plugin/``.
 
     Returns:
-        Undeclared executable, license, size, and symlink findings. Empty when
-        the tree is not a plugin package or every hook is a declared regular
-        file. Inventory presence is not a finding.
+        Undeclared executable, license, size, symlink, archive traversal, and
+        unadmitted-submodule findings. Empty when the tree is not a plugin
+        package or every hook is a declared regular file. Inventory presence
+        is not a finding.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -381,6 +400,8 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
             )
         )
     hits.extend(_source_mismatch_hits(root))
+    hits.extend(_archive_traversal_hits(root))
+    hits.extend(_unadmitted_submodule_hits(root))
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -412,6 +433,32 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 )
             )
     return tuple(hits)
+
+
+def inspect_claude_plugin_archive(
+    archive_path: Path,
+    extract_root: Path,
+) -> tuple[PluginHit, ...]:
+    """Inspect one zip or tar plugin archive without escaping ``extract_root``.
+
+    Members whose names leave the extract root (``../``, absolute POSIX
+    paths, Windows drive or UNC prefixes) are findings and are never
+    written. Safe members are materialized under ``extract_root``. Snippets
+    record a sanitized member-path label only.
+
+    Args:
+        archive_path: Regular zip or tar file.
+        extract_root: Bounded destination root.
+
+    Returns:
+        Path-traversal hits. Empty when every member stays inside the root
+        or ``archive_path`` is not a readable archive. Secret literals and
+        raw archive bytes never appear in snippets.
+    """
+    hits, safe_members = _classify_archive_members(archive_path, extract_root)
+    for name in safe_members:
+        _extract_archive_member(archive_path, name, extract_root)
+    return hits
 
 
 def build_claude_plugin_scan_receipt(
@@ -976,3 +1023,357 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
                 content = ""
             hits.extend(inspect_claude_plugin_file(path.name, relative, content))
     return tuple(hits)
+
+
+@dataclass(frozen=True, slots=True)
+class _SubmodulePointer:
+    """One nested submodule, gitlink, or .gitmodules path record."""
+
+    path: str
+    file: str
+    recorded_sha: str
+
+
+def _sanitize_path_snippet(value: str) -> str:
+    """Return a bidi-free path label without file contents or secrets."""
+    cleaned = _CONCEALED_CHAR.sub("", value.replace("\\", "/"))
+    return cleaned[:120] or "path"
+
+
+def _is_archive_path(path: Path) -> bool:
+    """Return whether ``path`` uses a zip or tar suffix."""
+    name = path.name.lower()
+    return name.endswith(_ARCHIVE_SUFFIXES)
+
+
+def _archive_display_path(archive_path: Path, extract_root: Path) -> str:
+    """Return a root-relative archive path, or the basename when unbound."""
+    try:
+        return archive_path.relative_to(extract_root).as_posix()
+    except ValueError:
+        return archive_path.name
+
+
+def _archive_member_escapes(member_name: str, extract_root: Path) -> bool:
+    """Return whether an archive member would resolve outside ``extract_root``."""
+    if not member_name or "\x00" in member_name or _CONCEALED_CHAR.search(member_name):
+        return True
+    stripped = _CONCEALED_CHAR.sub("", member_name)
+    raw = stripped.replace("\\", "/")
+    if (
+        raw.startswith("/")
+        or stripped.startswith("\\\\")
+        or raw.startswith("//")
+        or _WINDOWS_DRIVE.match(stripped)
+        or _WINDOWS_DRIVE.match(raw)
+    ):
+        return True
+    parts = [part for part in raw.split("/") if part not in {"", "."}]
+    if any(part == ".." or part.startswith("..") for part in parts):
+        return True
+    try:
+        root = extract_root.resolve()
+    except OSError:
+        return True
+    dest = Path(os.path.normpath(os.path.join(str(root), raw)))
+    try:
+        dest.relative_to(root)
+    except ValueError:
+        return True
+    return False
+
+
+def _traversal_hit(archive_file: str, member_name: str) -> PluginHit:
+    """Return one archive path-traversal finding with a sanitized snippet."""
+    return PluginHit(
+        rule_id="claude-plugin-archive-path-traversal",
+        line=1,
+        snippet=_sanitize_path_snippet(member_name),
+        message=CLAUDE_PLUGIN_ARCHIVE_PATH_TRAVERSAL_MESSAGE,
+        file=archive_file,
+    )
+
+
+def _archive_member_names(archive_path: Path) -> tuple[tuple[str, ...], bool]:
+    """Return member names and whether ``archive_path`` opened as an archive."""
+    try:
+        if archive_path.is_symlink() or not archive_path.is_file():
+            return (), False
+    except OSError:
+        return (), False
+    try:
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path) as archive:
+                return tuple(archive.namelist()), True
+        if tarfile.is_tarfile(archive_path):
+            with tarfile.open(archive_path) as archive:
+                return tuple(member.name for member in archive.getmembers()), True
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return (), False
+    return (), False
+
+
+def _classify_archive_members(
+    archive_path: Path, extract_root: Path
+) -> tuple[tuple[PluginHit, ...], tuple[str, ...]]:
+    """Split archive members into traversal hits and in-root extract names."""
+    names, readable = _archive_member_names(archive_path)
+    relative = _archive_display_path(archive_path, extract_root)
+    if not readable:
+        if _is_archive_path(archive_path):
+            return ((_traversal_hit(relative, archive_path.name),), ())
+        return (), ()
+    hits: list[PluginHit] = []
+    safe: list[str] = []
+    for name in names:
+        if _archive_member_escapes(name, extract_root):
+            hits.append(_traversal_hit(relative, name))
+            continue
+        if name.endswith("/") or name.endswith("\\"):
+            continue
+        safe.append(name)
+    return tuple(hits), tuple(safe)
+
+
+def _read_archive_member(archive_path: Path, name: str) -> bytes | None:
+    """Return one in-root archive member payload, or None on failure."""
+    try:
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path) as archive:
+                return archive.read(name)
+        if tarfile.is_tarfile(archive_path):
+            with tarfile.open(archive_path) as archive:
+                extracted = archive.extractfile(name)
+                if extracted is None:
+                    return None
+                return extracted.read()
+    except (OSError, KeyError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return None
+    return None
+
+
+def _extract_archive_member(
+    archive_path: Path, name: str, extract_root: Path
+) -> None:
+    """Write one in-root member under ``extract_root`` without following links."""
+    dest = _bounded_destination(extract_root, name)
+    if dest is None:
+        return
+    try:
+        if dest.exists() and (dest.is_symlink() or dest.is_dir()):
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = _read_archive_member(archive_path, name)
+        if payload is None:
+            return
+        dest.write_bytes(payload)
+    except OSError:
+        return
+
+
+def _bounded_destination(extract_root: Path, member_name: str) -> Path | None:
+    """Return the in-root destination for ``member_name``, or None if unsafe."""
+    if _archive_member_escapes(member_name, extract_root):
+        return None
+    root = extract_root.resolve()
+    return Path(os.path.normpath(os.path.join(str(root), member_name.replace("\\", "/"))))
+
+
+def _archive_traversal_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return traversal findings for zip/tar files inside ``root`` without extracting."""
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        try:
+            if path.is_symlink() or not path.is_file() or not _is_archive_path(path):
+                continue
+        except OSError:
+            continue
+        member_hits, _safe = _classify_archive_members(path, root)
+        hits.extend(member_hits)
+    return tuple(hits)
+
+
+def _unadmitted_submodule_hits(
+    root: Path, *, _seen: frozenset[Path] | None = None
+) -> tuple[PluginHit, ...]:
+    """Return findings for nested git pointers without admitted SHA identity."""
+    try:
+        resolved = root.resolve()
+    except OSError:
+        resolved = root
+    seen = set(_seen or ())
+    if resolved in seen:
+        return ()
+    seen.add(resolved)
+    hits: list[PluginHit] = []
+    for pointer in _iter_submodules(root):
+        if not _submodule_is_admitted(root, pointer):
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-unadmitted-submodule",
+                    line=1,
+                    snippet=_sanitize_path_snippet(pointer.path or pointer.file),
+                    message=CLAUDE_PLUGIN_UNADMITTED_SUBMODULE_MESSAGE,
+                    file=pointer.file,
+                )
+            )
+            continue
+        hits.extend(
+            _unadmitted_submodule_hits(root / pointer.path, _seen=frozenset(seen))
+        )
+    return tuple(hits)
+
+
+def _iter_submodules(root: Path) -> tuple[_SubmodulePointer, ...]:
+    """Discover .gitmodules entries and nested gitlink directories."""
+    found: dict[str, _SubmodulePointer] = {}
+    gitmodules = root / ".gitmodules"
+    try:
+        gitmodules_is_symlink = gitmodules.is_symlink()
+        gitmodules_is_file = gitmodules.is_file()
+    except OSError:
+        gitmodules_is_symlink = False
+        gitmodules_is_file = False
+    if gitmodules_is_symlink:
+        found[""] = _SubmodulePointer(path="", file=".gitmodules", recorded_sha="")
+    elif gitmodules_is_file:
+        for pointer in _parse_gitmodules(gitmodules):
+            found[pointer.path] = pointer
+    for path in _walk_entries(root):
+        if path.name != ".git":
+            continue
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            nested_root = path.parent
+            rel = nested_root.relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        if rel in {".", ""}:
+            continue
+        sha = _gitlink_sha(nested_root)
+        existing = found.get(rel)
+        if existing is None:
+            found[rel] = _SubmodulePointer(path=rel, file=rel, recorded_sha=sha)
+        elif not existing.recorded_sha and sha:
+            found[rel] = _SubmodulePointer(
+                path=rel, file=existing.file, recorded_sha=sha
+            )
+    return tuple(found.values())
+
+
+def _parse_gitmodules(path: Path) -> tuple[_SubmodulePointer, ...]:
+    """Parse submodule path/url records; fail closed on unreadable INI."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return (_SubmodulePointer(path="", file=".gitmodules", recorded_sha=""),)
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return (_SubmodulePointer(path="", file=".gitmodules", recorded_sha=""),)
+    pointers: list[_SubmodulePointer] = []
+    for section in parser.sections():
+        if not section.lower().startswith("submodule"):
+            continue
+        sub_path = parser.get(section, "path", fallback="").strip()
+        if not sub_path:
+            sub_path = section.split(None, 1)[-1].strip().strip('"')
+        sha = (
+            parser.get(section, "sha", fallback="")
+            or parser.get(section, "commit", fallback="")
+        ).strip()
+        pointers.append(
+            _SubmodulePointer(path=sub_path, file=".gitmodules", recorded_sha=sha)
+        )
+    return tuple(pointers)
+
+
+def _read_head_sha(gitdir: Path) -> str:
+    """Return a 40-character SHA from ``gitdir/HEAD``, else empty."""
+    head = gitdir / "HEAD"
+    try:
+        if head.is_symlink() or not head.is_file():
+            return ""
+        text = head.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return text if _FULL_SHA.fullmatch(text) else ""
+
+
+def _gitlink_sha(nested_root: Path) -> str:
+    """Return the recorded gitlink SHA for ``nested_root``, if present."""
+    git_path = nested_root / ".git"
+    try:
+        if git_path.is_symlink():
+            return ""
+        if git_path.is_file():
+            text = git_path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("gitdir:"):
+                    spec = stripped.split(":", 1)[1].strip()
+                    gitdir = Path(spec)
+                    if not gitdir.is_absolute():
+                        gitdir = nested_root / spec
+                    return _read_head_sha(gitdir)
+                if _FULL_SHA.fullmatch(stripped):
+                    return stripped
+        if git_path.is_dir():
+            return _read_head_sha(git_path)
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return ""
+
+
+def _recorded_sha(root: Path, pointer: _SubmodulePointer) -> str:
+    """Return a full SHA from gitmodules, gitlink file, or gitdir HEAD."""
+    if _FULL_SHA.fullmatch(pointer.recorded_sha):
+        return pointer.recorded_sha
+    nested = root / pointer.path
+    try:
+        if nested.is_symlink():
+            return ""
+        if nested.is_file():
+            body = nested.read_text(encoding="utf-8").strip()
+            return body if _FULL_SHA.fullmatch(body) else ""
+        if nested.is_dir():
+            sha = _gitlink_sha(nested)
+            return sha if _FULL_SHA.fullmatch(sha) else ""
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return ""
+
+
+def _submodule_is_admitted(root: Path, pointer: _SubmodulePointer) -> bool:
+    """Return whether a nested pointer has a complete admitted package identity."""
+    if not pointer.path or pointer.path in {".", ".."}:
+        return False
+    parts = Path(pointer.path.replace("\\", "/")).parts
+    if ".." in parts or pointer.path.startswith("/") or _WINDOWS_DRIVE.match(pointer.path):
+        return False
+    sha = _recorded_sha(root, pointer)
+    if not sha:
+        return False
+    nested = root / pointer.path
+    try:
+        if nested.is_symlink() or not nested.is_dir():
+            return False
+    except OSError:
+        return False
+    if _license_summary(nested) == "absent":
+        return False
+    identity = _plugin_identity(nested)
+    nested_sha = identity["source_commit_sha"]
+    if not _FULL_SHA.fullmatch(nested_sha or ""):
+        return False
+    if nested_sha.lower() != sha.lower():
+        return False
+    plugin_dir = nested / ".claude-plugin"
+    try:
+        if not plugin_dir.is_dir() or plugin_dir.is_symlink():
+            return False
+    except OSError:
+        return False
+    return True

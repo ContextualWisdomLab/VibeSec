@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
+import tarfile
+import zipfile
 
 import pytest
 
@@ -987,3 +990,915 @@ def test_capability_inventory_edges_skip_malformed_and_non_object_manifests(
     assert all(isinstance(inventory[key], bool) for key in inventory)
     assert any(hit.rule_id == "claude-plugin-undeclared-executable" for hit in hits)
     assert any(hit.file == "commands/run.py" for hit in hits)
+
+
+_NESTED_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_ARCHIVE_SECRET = "sk-archive-must-not-leak"
+_ARCHIVE_TRAVERSAL_RULE = "claude-plugin-archive-path-traversal"
+_UNADMITTED_SUBMODULE_RULE = "claude-plugin-unadmitted-submodule"
+
+
+def _write_zip(path: Path, members: dict[str, bytes]) -> Path:
+    """Write a purpose-built zip archive with the given member names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    return path
+
+
+def _write_tar(path: Path, members: dict[str, bytes], mode: str = "w") -> Path:
+    """Write a purpose-built tar archive with the given member names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(path, mode) as archive:
+        for name, payload in members.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return path
+
+
+def _write_gitmodules(root: Path, path: str, url: str, *, branch: str | None = None) -> None:
+    """Write a nested submodule pointer without inventing a Git SHA."""
+    lines = [
+        f'[submodule "{path}"]',
+        f"\tpath = {path}",
+        f"\turl = {url}",
+    ]
+    if branch is not None:
+        lines.append(f"\tbranch = {branch}")
+    lines.append("")
+    (root / ".gitmodules").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_gitlink(root: Path, submodule_path: str, sha: str) -> Path:
+    """Materialize a gitlink via gitdir HEAD recording ``sha``."""
+    nested = root / submodule_path
+    nested.mkdir(parents=True, exist_ok=True)
+    gitdir = root / ".git" / "modules" / Path(submodule_path)
+    gitdir.mkdir(parents=True, exist_ok=True)
+    (gitdir / "HEAD").write_text(sha + "\n", encoding="utf-8")
+    relative_gitdir = Path(os_relpath(gitdir, nested))
+    (nested / ".git").write_text(f"gitdir: {relative_gitdir.as_posix()}\n", encoding="utf-8")
+    return nested
+
+
+def os_relpath(target: Path, start: Path) -> str:
+    """Return a POSIX relative path from ``start`` to ``target``."""
+    import os
+
+    return Path(os.path.relpath(target, start)).as_posix()
+
+
+def _write_nested_plugin(nested: Path, sha: str) -> None:
+    """Write a pinned licensed nested plugin.json under ``nested``."""
+    _write_marketplace(
+        nested,
+        {
+            "name": "nested",
+            "version": "1.0.0",
+            "source": {
+                "source": "github",
+                "repo": "example/nested",
+                "ref": sha,
+            },
+        },
+        name="plugin.json",
+    )
+    (nested / "LICENSE").write_text("MIT\n", encoding="utf-8")
+
+
+def test_zip_parent_escape_member_fails_closed_and_is_not_extracted(
+    tmp_path: Path,
+) -> None:
+    """Zip members named ``../escape.sh`` must not leave the extract root."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(
+        root / "payload.zip",
+        {"../escape.sh": f"#!/bin/sh\necho {_ARCHIVE_SECRET}\n".encode()},
+    )
+    escaped = tmp_path / "escape.sh"
+
+    hits = inspect_claude_plugin_archive(archive, root)
+    package_hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    snippets = [hit.snippet for hit in (*hits, *package_hits)]
+    serialized = json.dumps(receipt.as_dict())
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in package_hits)
+    assert all("_" in hit.rule_id or "-" in hit.rule_id for hit in hits)
+    assert not escaped.exists()
+    assert receipt.scan_result == "fail"
+    assert _ARCHIVE_TRAVERSAL_RULE in receipt.finding_summary
+    assert _ARCHIVE_SECRET not in serialized
+    assert all(_ARCHIVE_SECRET not in snippet for snippet in snippets)
+    assert all("\u202e" not in snippet for snippet in snippets)
+
+
+def test_tar_absolute_member_fails_closed_and_is_not_extracted(
+    tmp_path: Path,
+) -> None:
+    """Tar members named ``/tmp/x`` must not be followed as plugin content."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_tar(
+        root / "payload.tar",
+        {"/tmp/x": f"{_ARCHIVE_SECRET}\n".encode()},
+    )
+    absolute = Path("/tmp/x")
+    existed = absolute.exists()
+    before = absolute.read_bytes() if existed else None
+
+    hits = inspect_claude_plugin_archive(archive, root)
+    package_hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in package_hits)
+    assert receipt.scan_result == "fail"
+    if existed:
+        assert absolute.read_bytes() == before
+    else:
+        assert not absolute.exists()
+    assert _ARCHIVE_SECRET not in json.dumps(receipt.as_dict())
+    assert all(_ARCHIVE_SECRET not in hit.snippet for hit in (*hits, *package_hits))
+
+
+def test_archive_windows_prefix_and_nested_dotdot_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Windows prefixes and nested ``..`` members are traversal, not content."""
+    from appguardrail_core.claude_plugin_detector import inspect_claude_plugin_archive
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    windows_zip = _write_zip(
+        root / "windows.zip",
+        {"C:\\Windows\\Temp\\x": b"ignored\n", "..\\escape.sh": b"ignored\n"},
+    )
+    nested_tar = _write_tar(
+        root / "nested.tar.gz",
+        {"hooks/../../escape.sh": b"ignored\n"},
+        mode="w:gz",
+    )
+    bidi_zip = _write_zip(
+        root / "bidi.zip",
+        {"..\u202eescape.sh": b"ignored\n"},
+    )
+
+    windows_hits = inspect_claude_plugin_archive(windows_zip, root)
+    nested_hits = inspect_claude_plugin_archive(nested_tar, root)
+    bidi_hits = inspect_claude_plugin_archive(bidi_zip, root)
+
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in windows_hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in nested_hits)
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in bidi_hits)
+    assert all("\u202e" not in hit.snippet for hit in bidi_hits)
+    assert not (tmp_path / "escape.sh").exists()
+
+
+def test_safe_archive_member_is_not_a_traversal_finding(tmp_path: Path) -> None:
+    """In-tree archive members may be materialized and are not traversal."""
+    from appguardrail_core.claude_plugin_detector import inspect_claude_plugin_archive
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(root / "safe.zip", {"hooks/notes.txt": b"hello\n"})
+    hits = inspect_claude_plugin_archive(archive, root)
+    assert all(hit.rule_id != _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert (root / "hooks" / "notes.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_gitmodules_branch_main_without_sha_fails_closed(tmp_path: Path) -> None:
+    """A nested submodule URL on branch main without a SHA fails admission."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+        branch="main",
+    )
+    (root / "vendor" / "nested").mkdir(parents=True)
+
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert any(hit.rule_id == _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert receipt.scan_result == "fail"
+    assert _UNADMITTED_SUBMODULE_RULE in receipt.finding_summary
+    assert all("\u202e" not in hit.snippet for hit in hits)
+
+
+def test_gitlink_with_admitted_nested_plugin_is_not_unadmitted(
+    tmp_path: Path,
+) -> None:
+    """A full SHA gitlink plus pinned licensed nested plugin.json is negative."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(root, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, _NESTED_SHA)
+
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert all(hit.rule_id != _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert receipt.scan_result == "pass"
+    assert _UNADMITTED_SUBMODULE_RULE not in receipt.finding_summary
+
+
+def test_gitlink_sha_without_complete_nested_identity_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A recorded SHA is not admission when the nested package is incomplete."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    missing_manifest = _pinned_plugin(tmp_path / "missing-manifest")
+    _write_gitmodules(
+        missing_manifest,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    _write_gitlink(missing_manifest, "vendor/nested", _NESTED_SHA)
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(missing_manifest)
+    )
+
+    floating = _pinned_plugin(tmp_path / "floating")
+    _write_gitmodules(
+        floating,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(floating, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, "main")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(floating)
+    )
+
+    unlicensed = _pinned_plugin(tmp_path / "unlicensed")
+    _write_gitmodules(
+        unlicensed,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    nested = _write_gitlink(unlicensed, "vendor/nested", _NESTED_SHA)
+    _write_marketplace(
+        nested,
+        {
+            "name": "nested",
+            "source": {"repo": "example/nested", "ref": _NESTED_SHA},
+        },
+        name="plugin.json",
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in scan_claude_plugin_package(unlicensed)
+    )
+
+
+def test_pinned_licensed_plugin_still_passes_archive_submodule_rules(
+    tmp_path: Path,
+) -> None:
+    """Existing pinned licensed plugins stay a pass without archives or gitlinks."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+        scan_claude_plugin_package,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    inventory = inventory_claude_plugin_capabilities(root)
+
+    assert hits == ()
+    assert receipt.scan_result == "pass"
+    assert receipt.finding_summary == ()
+    assert inventory["shell_execution"] is True
+    assert all(
+        hit.rule_id
+        not in {_ARCHIVE_TRAVERSAL_RULE, _UNADMITTED_SUBMODULE_RULE}
+        for hit in hits
+    )
+
+
+def test_archive_and_submodule_snippets_omit_secrets_and_bidi(
+    tmp_path: Path,
+) -> None:
+    """Snippets stay labels: no raw archive bytes, secrets, or bidi characters."""
+    from appguardrail_core.claude_plugin_detector import (
+        inspect_claude_plugin_archive,
+        scan_claude_plugin_package,
+    )
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive = _write_zip(
+        root / "payload.zip",
+        {
+            "../escape.sh": f"OPENAI_API_KEY={_ARCHIVE_SECRET}\n".encode(),
+            "hooks/\u202ehidden.sh": b"ignored\n",
+        },
+    )
+    _write_gitmodules(
+        root,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+        branch="main",
+    )
+    hits = (
+        *inspect_claude_plugin_archive(archive, root),
+        *scan_claude_plugin_package(root),
+    )
+    snippets = [hit.snippet for hit in hits]
+    assert any(hit.rule_id == _ARCHIVE_TRAVERSAL_RULE for hit in hits)
+    assert any(hit.rule_id == _UNADMITTED_SUBMODULE_RULE for hit in hits)
+    assert all(_ARCHIVE_SECRET not in snippet for snippet in snippets)
+    assert all("OPENAI_API_KEY" not in snippet for snippet in snippets)
+    assert all("\u202e" not in snippet for snippet in snippets)
+
+
+def test_archive_submodule_coverage_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hostile archive and gitlink edges stay fail-closed without leaking bytes."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    assert detector.inspect_claude_plugin_archive(
+        root / ".claude-plugin" / "plugin.json", root
+    ) == ()
+    fake = root / "fake.zip"
+    fake.write_text("not-a-zip", encoding="utf-8")
+    assert any(
+        hit.rule_id == _ARCHIVE_TRAVERSAL_RULE
+        for hit in detector.inspect_claude_plugin_archive(fake, root)
+    )
+    outside_zip = _write_zip(tmp_path / "outside.zip", {"../escape.sh": b"x"})
+    outside_hits = detector.inspect_claude_plugin_archive(outside_zip, root)
+    assert outside_hits[0].file == "outside.zip"
+    assert detector._sanitize_path_snippet("\u202e") == "path"
+    assert detector._archive_member_escapes("", root) is True
+    assert detector._archive_member_escapes("foo\x00bar", root) is True
+    assert detector._archive_member_escapes("\\\\server\\share\\x", root) is True
+    assert detector._archive_member_escapes("//server/share/x", root) is True
+
+    _write_zip(root / "dirs.zip", {"hooks/": b"", "hooks\\": b"", "hooks/ok.txt": b"ok\n"})
+    dir_hits = detector.inspect_claude_plugin_archive(root / "dirs.zip", root)
+    assert all(hit.rule_id != _ARCHIVE_TRAVERSAL_RULE for hit in dir_hits)
+    assert (root / "hooks" / "ok.txt").read_text(encoding="utf-8") == "ok\n"
+
+    tar_path = _write_tar(root / "safe.tar", {"hooks/from-tar.txt": b"tar\n"})
+    tar_hits = detector.inspect_claude_plugin_archive(tar_path, root)
+    assert tar_hits == ()
+    assert (root / "hooks" / "from-tar.txt").read_text(encoding="utf-8") == "tar\n"
+
+    dir_tar = root / "dir-only.tar"
+    with tarfile.open(dir_tar, "w") as archive:
+        info = tarfile.TarInfo(name="hooks")
+        info.type = tarfile.DIRTYPE
+        archive.addfile(info)
+    detector.inspect_claude_plugin_archive(dir_tar, root)
+
+    (root / "hooks").mkdir(exist_ok=True)
+    detector.inspect_claude_plugin_archive(
+        _write_zip(root / "dir-dest.zip", {"hooks": b"payload"}), root
+    )
+    linked_notes = root / "notes.txt"
+    linked_notes.symlink_to(root / "LICENSE")
+    detector.inspect_claude_plugin_archive(
+        _write_zip(root / "sym-dest.zip", {"notes.txt": b"new\n"}), root
+    )
+    detector._extract_archive_member(tar_path, "../escape.sh", root)
+    assert detector._bounded_destination(root, "../escape.sh") is None
+
+    original_zipfile = detector.zipfile.ZipFile
+
+    def boom_zip(*args, **kwargs):
+        raise zipfile.BadZipFile("bad")
+
+    monkeypatch.setattr(detector.zipfile, "ZipFile", boom_zip)
+    assert any(
+        hit.rule_id == _ARCHIVE_TRAVERSAL_RULE
+        for hit in detector.inspect_claude_plugin_archive(root / "dirs.zip", root)
+    )
+    monkeypatch.setattr(detector.zipfile, "ZipFile", original_zipfile)
+
+    original_tarfile = detector.tarfile.open
+
+    def boom_tar(*args, **kwargs):
+        raise tarfile.TarError("bad")
+
+    monkeypatch.setattr(detector.tarfile, "open", boom_tar)
+    assert detector._read_archive_member(tar_path, "hooks/from-tar.txt") is None
+    monkeypatch.setattr(detector.tarfile, "open", original_tarfile)
+
+    monkeypatch.setattr(detector.zipfile, "is_zipfile", lambda _path: False)
+    monkeypatch.setattr(detector.tarfile, "is_tarfile", lambda _path: False)
+    assert detector._read_archive_member(tar_path, "hooks/from-tar.txt") is None
+    monkeypatch.setattr(detector.zipfile, "is_zipfile", zipfile.is_zipfile)
+    monkeypatch.setattr(detector.tarfile, "is_tarfile", tarfile.is_tarfile)
+
+    original_resolve = Path.resolve
+
+    def resolve(self: Path, *args, **kwargs):
+        if self.name == "blocked-resolve":
+            raise OSError("resolve")
+        return original_resolve(self, *args, **kwargs)
+
+    blocked = tmp_path / "blocked-resolve"
+    blocked.mkdir()
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert detector._archive_member_escapes("hooks/ok.txt", blocked) is True
+    assert detector._bounded_destination(blocked, "hooks/ok.txt") is None
+    monkeypatch.setattr(Path, "resolve", original_resolve)
+
+    original_relative_to = Path.relative_to
+
+    def relative_to(self: Path, other, *args, **kwargs):
+        if self.name == "escape-rel":
+            raise ValueError("outside")
+        return original_relative_to(self, other, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "relative_to", relative_to)
+    escape_rel = root / "escape-rel"
+    escape_rel.write_text("x\n", encoding="utf-8")
+    detector._archive_member_escapes("escape-rel", root)
+    detector._bounded_destination(root, "escape-rel")
+    monkeypatch.setattr(Path, "relative_to", original_relative_to)
+
+    original_write = Path.write_bytes
+
+    def write_bytes(self: Path, data: bytes) -> int:
+        if self.name == "ok.txt":
+            raise OSError("write")
+        return original_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    detector._extract_archive_member(root / "dirs.zip", "hooks/ok.txt", root)
+    monkeypatch.setattr(Path, "write_bytes", original_write)
+
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(self: Path) -> bool:
+        if self.name in {"payload.zip", "blocked.zip", ".gitmodules"}:
+            raise OSError("stat")
+        return original_is_symlink(self)
+
+    (root / "blocked.zip").write_bytes(b"PK")
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    detector._archive_member_names(root / "blocked.zip")
+    detector._archive_traversal_hits(root)
+    detector._iter_submodules(root)
+    monkeypatch.setattr(Path, "is_symlink", original_is_symlink)
+
+    gitmodules_link = _pinned_plugin(tmp_path / "linked-modules")
+    (gitmodules_link / ".gitmodules").symlink_to(gitmodules_link / "LICENSE")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(gitmodules_link)
+    )
+
+    broken = _pinned_plugin(tmp_path / "broken-modules")
+    (broken / ".gitmodules").write_bytes(b"\xff\xfe")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(broken)
+    )
+    (broken / ".gitmodules").write_text("[submodule\n", encoding="utf-8")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(broken)
+    )
+    (broken / ".gitmodules").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        '[submodule "vendor/from-name"]\n\turl = https://example.invalid/n.git\n',
+        encoding="utf-8",
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(broken)
+    )
+
+    original_read_text = Path.read_text
+
+    def read_text(self: Path, *args, **kwargs):
+        if self.name == ".gitmodules":
+            raise OSError("read")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    detector._parse_gitmodules(broken / ".gitmodules")
+    monkeypatch.setattr(Path, "read_text", original_read_text)
+
+    gitlink_only = _pinned_plugin(tmp_path / "gitlink-only")
+    nested_only = gitlink_only / "vendor" / "only"
+    nested_only.mkdir(parents=True)
+    (nested_only / ".git").write_text(f"{_NESTED_SHA}\n", encoding="utf-8")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(gitlink_only)
+    )
+
+    sha_file = _pinned_plugin(tmp_path / "sha-file")
+    _write_gitmodules(
+        sha_file, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    (sha_file / "vendor").mkdir()
+    (sha_file / "vendor" / "nested").write_text(f"{_NESTED_SHA}\n", encoding="utf-8")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(sha_file)
+    )
+
+    gitdir_dir = _pinned_plugin(tmp_path / "gitdir-dir")
+    _write_gitmodules(
+        gitdir_dir, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested_dir = gitdir_dir / "vendor" / "nested"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / ".git").mkdir()
+    (nested_dir / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(gitdir_dir)
+    )
+    (nested_dir / ".git" / "HEAD").write_bytes(b"\xff\xfe")
+    detector._gitlink_sha(nested_dir)
+    (nested_dir / ".git").rename(nested_dir / ".git-dir")
+    (nested_dir / ".git").symlink_to(nested_dir / ".git-dir")
+    assert detector._gitlink_sha(nested_dir) == ""
+    detector._gitlink_sha(nested_dir / "missing")
+
+    abs_git = _pinned_plugin(tmp_path / "abs-gitdir")
+    nested_abs = abs_git / "vendor" / "nested"
+    nested_abs.mkdir(parents=True)
+    gitdir_abs = tmp_path / "abs-gitdir-store"
+    gitdir_abs.mkdir()
+    (gitdir_abs / "HEAD").write_text(_NESTED_SHA + "\n", encoding="utf-8")
+    (nested_abs / ".git").write_text(f"gitdir: {gitdir_abs}\n", encoding="utf-8")
+    assert detector._gitlink_sha(nested_abs) == _NESTED_SHA
+    (gitdir_abs / "HEAD").unlink()
+    (gitdir_abs / "HEAD").mkdir()
+    assert detector._read_head_sha(gitdir_abs) == ""
+
+    mismatch = _pinned_plugin(tmp_path / "mismatch")
+    _write_gitmodules(
+        mismatch, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested = _write_gitlink(mismatch, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, "cccccccccccccccccccccccccccccccccccccccc")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(mismatch)
+    )
+
+    sha_field = _pinned_plugin(tmp_path / "sha-field")
+    (sha_field / ".gitmodules").write_text(
+        '[submodule "vendor/nested"]\n'
+        "\tpath = vendor/nested\n"
+        "\turl = https://github.com/example/nested.git\n"
+        f"\tsha = {_NESTED_SHA}\n",
+        encoding="utf-8",
+    )
+    nested = sha_field / "vendor" / "nested"
+    nested.mkdir(parents=True)
+    _write_nested_plugin(nested, _NESTED_SHA)
+    assert all(
+        hit.rule_id != _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(sha_field)
+    )
+
+    linked_plugin = _pinned_plugin(tmp_path / "linked-plugin-dir")
+    _write_gitmodules(
+        linked_plugin, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested = _write_gitlink(linked_plugin, "vendor/nested", _NESTED_SHA)
+    real_plugin = tmp_path / "real-nested"
+    _write_nested_plugin(real_plugin, _NESTED_SHA)
+    (nested / ".claude-plugin").symlink_to(real_plugin / ".claude-plugin")
+    (nested / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(linked_plugin)
+    )
+
+    nested_escape = _pinned_plugin(tmp_path / "escape-sub")
+    _write_gitmodules(
+        nested_escape, "../outside", "https://github.com/example/nested.git"
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(nested_escape)
+    )
+    _write_gitmodules(
+        nested_escape, "C:\\nested", "https://github.com/example/nested.git"
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(nested_escape)
+    )
+    _write_gitmodules(
+        nested_escape, "/tmp/nested", "https://github.com/example/nested.git"
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(nested_escape)
+    )
+
+    pointer = detector._SubmodulePointer(path="", file=".gitmodules", recorded_sha="")
+    assert detector._submodule_is_admitted(root, pointer) is False
+    assert (
+        detector._unadmitted_submodule_hits(root, _seen=frozenset({root.resolve()}))
+        == ()
+    )
+
+    original_resolve_root = Path.resolve
+
+    def resolve_root(self: Path, *args, **kwargs):
+        if self == root:
+            raise OSError("root-resolve")
+        return original_resolve_root(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_root)
+    detector._unadmitted_submodule_hits(root)
+    monkeypatch.setattr(Path, "resolve", original_resolve_root)
+
+    admitted = _pinned_plugin(tmp_path / "admitted-nested")
+    _write_gitmodules(
+        admitted, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested = _write_gitlink(admitted, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, _NESTED_SHA)
+    _write_gitmodules(
+        nested, "vendor/deep", "https://github.com/example/deep.git", branch="main"
+    )
+    (nested / "vendor" / "deep").mkdir(parents=True)
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(admitted)
+    )
+
+    linked_nested = _pinned_plugin(tmp_path / "linked-nested")
+    _write_gitmodules(
+        linked_nested,
+        "vendor/nested",
+        "https://github.com/example/nested.git",
+    )
+    (linked_nested / "vendor").mkdir()
+    (linked_nested / "vendor" / "nested").symlink_to(tmp_path / "plugin")
+    (linked_nested / ".gitmodules").write_text(
+        '[submodule "vendor/nested"]\n'
+        "\tpath = vendor/nested\n"
+        f"\tcommit = {_NESTED_SHA}\n",
+        encoding="utf-8",
+    )
+    assert any(
+        hit.rule_id == _UNADMITTED_SUBMODULE_RULE
+        for hit in detector.scan_claude_plugin_package(linked_nested)
+    )
+
+    original_is_dir = Path.is_dir
+
+    def is_dir(self: Path) -> bool:
+        if self.name == "nested" and "os-nested" in self.as_posix():
+            raise OSError("isdir")
+        return original_is_dir(self)
+
+    os_nested = _pinned_plugin(tmp_path / "os-nested")
+    _write_gitmodules(
+        os_nested, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested = _write_gitlink(os_nested, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, _NESTED_SHA)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    detector._submodule_is_admitted(
+        os_nested,
+        detector._SubmodulePointer(
+            path="vendor/nested", file=".gitmodules", recorded_sha=_NESTED_SHA
+        ),
+    )
+    monkeypatch.setattr(Path, "is_dir", original_is_dir)
+
+    original_is_file = Path.is_file
+
+    def is_file(self: Path) -> bool:
+        if self.name == ".git" and "file-err" in self.as_posix():
+            raise OSError("isfile")
+        return original_is_file(self)
+
+    file_err = _pinned_plugin(tmp_path / "file-err")
+    nested = file_err / "vendor" / "nested"
+    nested.mkdir(parents=True)
+    (nested / ".git").write_text("gitdir: missing\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "is_file", is_file)
+    detector._iter_submodules(file_err)
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+
+    original_nested_is_symlink = Path.is_symlink
+
+    def nested_is_symlink(self: Path) -> bool:
+        if "sha-symlink" in self.as_posix() and self.name == "nested":
+            raise OSError("sym")
+        return original_nested_is_symlink(self)
+
+    sha_symlink = _pinned_plugin(tmp_path / "sha-symlink")
+    monkeypatch.setattr(Path, "is_symlink", nested_is_symlink)
+    detector._recorded_sha(
+        sha_symlink,
+        detector._SubmodulePointer(
+            path="vendor/nested", file=".gitmodules", recorded_sha=""
+        ),
+    )
+    monkeypatch.setattr(Path, "is_symlink", original_nested_is_symlink)
+
+    detector._recorded_sha(
+        root,
+        detector._SubmodulePointer(
+            path="missing-nested", file=".gitmodules", recorded_sha=""
+        ),
+    )
+
+    git_dir_walk = _pinned_plugin(tmp_path / "git-dir-walk")
+    nested = git_dir_walk / "vendor" / "nested"
+    nested.mkdir(parents=True)
+    (nested / ".git").mkdir()
+    detector._iter_submodules(git_dir_walk)
+
+
+def test_archive_submodule_remaining_coverage_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cover remaining archive open, extract, and gitlink error branches."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _pinned_plugin(tmp_path / "plugin")
+    archive_dir = root / "not-a-file.zip"
+    archive_dir.mkdir()
+    assert detector._archive_member_names(archive_dir) == ((), False)
+    link_zip = root / "link.zip"
+    link_zip.symlink_to(root / "LICENSE")
+    assert detector._archive_member_names(link_zip) == ((), False)
+
+    dir_tar = root / "dir-only.tar"
+    with tarfile.open(dir_tar, "w") as archive:
+        info = tarfile.TarInfo(name="hooks")
+        info.type = tarfile.DIRTYPE
+        archive.addfile(info)
+    assert detector._read_archive_member(dir_tar, "hooks") is None
+    mkdir_zip = _write_zip(root / "mkdir.zip", {"missing-parent/file.txt": b"x"})
+
+    class FakeZip:
+        """Zip handle that fails member reads."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            """Ignore the underlying path."""
+
+        def __enter__(self):
+            """Return the failing handle."""
+            return self
+
+        def __exit__(self, *args) -> bool:
+            """Do not suppress errors."""
+            return False
+
+        def read(self, name: str) -> bytes:
+            """Fail closed when a member cannot be read."""
+            raise KeyError(name)
+
+        def namelist(self) -> list[str]:
+            """Return no members."""
+            return []
+
+    original_zipfile_cls = zipfile.ZipFile
+    original_is_zipfile = zipfile.is_zipfile
+    monkeypatch.setattr(detector.zipfile, "is_zipfile", lambda _path: True)
+    monkeypatch.setattr(detector.zipfile, "ZipFile", FakeZip)
+    assert detector._read_archive_member(root / "LICENSE", "missing") is None
+    monkeypatch.setattr(detector.zipfile, "is_zipfile", original_is_zipfile)
+    monkeypatch.setattr(detector.zipfile, "ZipFile", original_zipfile_cls)
+
+    original_mkdir = Path.mkdir
+
+    def mkdir(self: Path, *args, **kwargs):
+        if self.name == "missing-parent":
+            raise OSError("mkdir")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    detector._extract_archive_member(mkdir_zip, "missing-parent/file.txt", root)
+    monkeypatch.setattr(Path, "mkdir", original_mkdir)
+
+    walked = {"done": False}
+    original_walk = detector._walk_entries
+
+    def walk(scan_root: Path):
+        result = original_walk(scan_root)
+        walked["done"] = True
+        return result
+
+    original_is_file = Path.is_file
+
+    def is_file(self: Path) -> bool:
+        if walked["done"] and self.name == "mkdir.zip":
+            raise OSError("stat")
+        return original_is_file(self)
+
+    monkeypatch.setattr(detector, "_walk_entries", walk)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    detector._archive_traversal_hits(root)
+    monkeypatch.setattr(detector, "_walk_entries", original_walk)
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+    walked["done"] = False
+
+    symlink_git = _pinned_plugin(tmp_path / "symlink-git")
+    nested = symlink_git / "vendor" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "git-target").mkdir()
+    (nested / ".git").symlink_to(nested / "git-target")
+    detector._iter_submodules(symlink_git)
+
+    rel_err = _pinned_plugin(tmp_path / "rel-err")
+    nested = rel_err / "vendor" / "nested"
+    nested.mkdir(parents=True)
+    (nested / ".git").write_text(f"{_NESTED_SHA}\n", encoding="utf-8")
+    original_relative_to = Path.relative_to
+
+    def relative_to(self: Path, other, *args, **kwargs):
+        if self.name == "nested" and "rel-err" in Path(str(other)).as_posix():
+            raise ValueError("rel")
+        return original_relative_to(self, other, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "relative_to", relative_to)
+    detector._iter_submodules(rel_err)
+    monkeypatch.setattr(Path, "relative_to", original_relative_to)
+
+    decode_git = tmp_path / "decode-git"
+    decode_git.mkdir()
+    (decode_git / ".git").write_bytes(b"\xff\xfe")
+    assert detector._gitlink_sha(decode_git) == ""
+
+    linked = _pinned_plugin(tmp_path / "recorded-symlink")
+    (linked / "vendor").mkdir()
+    (linked / "vendor" / "nested").symlink_to(root)
+    assert (
+        detector._recorded_sha(
+            linked,
+            detector._SubmodulePointer(
+                path="vendor/nested", file=".gitmodules", recorded_sha=""
+            ),
+        )
+        == ""
+    )
+
+    plugin_dir_err = _pinned_plugin(tmp_path / "plugin-dir-err")
+    _write_gitmodules(
+        plugin_dir_err, "vendor/nested", "https://github.com/example/nested.git"
+    )
+    nested = _write_gitlink(plugin_dir_err, "vendor/nested", _NESTED_SHA)
+    _write_nested_plugin(nested, _NESTED_SHA)
+    original_is_dir = Path.is_dir
+
+    def is_dir(self: Path) -> bool:
+        if self.name == ".claude-plugin" and "plugin-dir-err" in self.as_posix():
+            raise OSError("isdir")
+        return original_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    assert (
+        detector._submodule_is_admitted(
+            plugin_dir_err,
+            detector._SubmodulePointer(
+                path="vendor/nested",
+                file=".gitmodules",
+                recorded_sha=_NESTED_SHA,
+            ),
+        )
+        is False
+    )
+    monkeypatch.setattr(Path, "is_dir", original_is_dir)
