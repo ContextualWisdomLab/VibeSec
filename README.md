@@ -82,7 +82,7 @@ Supported external scanners are optional extensions. AppGuardrail's Python packa
 For an authorized running application, OWASP ZAP baseline can be invoked explicitly. Do not point active testing at a system you are not authorized to assess.
 
 ```bash
-APPGUARDRAIL_TARGET_URL=https://your-authorized-test-host.example appguardrail scan .
+appguardrail scan --zap-baseline https://your-authorized-test-host.example .
 ```
 
 ### Fix safely
