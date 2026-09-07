@@ -86,6 +86,13 @@ def test_mcp_args_named_secret_is_reported() -> None:
     assert all(hit.rule_id != _NETWORK_RULE for hit in hits if hit.rule_id == _MCP_SECRET_RULE)
 
 
+def test_mcp_non_string_args_are_skipped_until_a_secret() -> None:
+    """Non-string MCP args are ignored; a later named-secret arg still fails."""
+    body = json.dumps(_bounded_mcp(args=[1, "$OPENAI_API_KEY"]), indent=2)
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", body)
+    assert any(hit.rule_id == _MCP_SECRET_RULE for hit in hits)
+
+
 def test_mcp_command_named_secret_is_reported() -> None:
     """An MCP command string that interpolates a named secret fails closed."""
     payload = _bounded_mcp()
