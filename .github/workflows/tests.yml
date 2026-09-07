@@ -48,3 +48,9 @@ jobs:
             --test tests/test_code_scanning_page_result_issue_index.py \
             --test tests/test_code_scanning_remaining_coverage.py \
             --test tests/test_code_scanning_review_regressions.py
+      - name: Verify 100% statement coverage for CWL security-issue detectors
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/claude_plugin_detector.py \
+            --test tests/test_claude_plugin_supply_chain.py

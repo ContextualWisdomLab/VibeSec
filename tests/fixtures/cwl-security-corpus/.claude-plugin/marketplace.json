@@ -1,0 +1,7 @@
+{
+  "name": "float-plugin",
+  "source": {
+    "repo": "example/float-plugin",
+    "ref": "main"
+  }
+}

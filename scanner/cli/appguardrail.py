@@ -897,7 +897,7 @@ SCAN_RULES = [
     {
         "id": "hardcoded-password",
         "pattern": re.compile(
-            r'(?i)(?:password|passwd|pwd)\s*[=:]\s*["\x27][^"\x27\s]{6,}["\x27]'
+            r'(?i)(?:password|passwd|pwd)\s*[=:]\s*["\x27](?!\$)[^"\x27\s]{6,}["\x27]'
         ),
         "severity": "HIGH",
         "message": "Possible hardcoded password detected. [OWASP A07:2021 - Identification and Authentication Failures]",
@@ -1093,6 +1093,7 @@ SECURITY_HIDDEN_DIRS = {
     ".firebase",
     ".well-known",
     ".config",
+    ".claude-plugin",
 }
 
 SKIP_EXTENSIONS = {
@@ -1436,6 +1437,22 @@ def cmd_scan(args):
             path_context=path_context,
         )
         findings.extend(file_findings)
+
+    if not scan_path_is_file and (scan_path / ".claude-plugin").is_dir():
+        from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+        for plugin_hit in scan_claude_plugin_package(scan_path):
+            findings.append(
+                _build_finding(
+                    "appguardrail-rule",
+                    plugin_hit.rule_id,
+                    "HIGH",
+                    plugin_hit.message,
+                    plugin_hit.file or ".claude-plugin/plugin.json",
+                    plugin_hit.line,
+                    plugin_hit.snippet,
+                )
+            )
 
     profile = detect_stack_profile(scanned_files)
     languages = set(profile.languages)
@@ -2290,13 +2307,24 @@ def _safe_snippet(rule_id: str, snippet: str, category: str) -> str:
     return _sanitize_terminal_output(snippet)
 
 
+_TEST_PATH_RE = re.compile(
+    r"(?:^|/)(?:tests?|__tests__)(?:/|$)|(?:^|/)[^/]*\.(?:test|spec)\.[A-Za-z0-9]+$"
+)
+_PASSWORD_INDIRECTION_RE = re.compile(r""":['\"]|["']\$""")
+
+
+def _hardcoded_password_is_literal(matched: str) -> bool:
+    """Return whether a password match embeds a secret literal rather than indirection."""
+    return not _PASSWORD_INDIRECTION_RE.search(matched or "")
+
+
 def _finding_context(file_path: str, snippet: str = "") -> str:
     """Classify a finding path as app code, docs, tests, examples, or fixtures."""
     path = (file_path or "").replace("\\", "/").lstrip("./")
     snippet = (snippet or "").strip()
     if path == "README.md" or path.startswith(("docs/", "checklists/", "prompts/")):
         return "doc"
-    if path.startswith("tests/") or "/tests/" in path:
+    if _TEST_PATH_RE.search(path):
         return "test"
     if path.startswith("examples/"):
         return "example"
@@ -2976,6 +3004,35 @@ def _scan_file(
                             shell_call.snippet,
                         )
                     )
+            name = file_path.name
+            maybe_plugin = name in {
+                "marketplace.json",
+                "plugin.json",
+                "hooks.json",
+            } or ext in {".sh", ".bash", ".zsh"}
+            if maybe_plugin:
+                posix_path = _display_path(context.relative_candidate(file_path))
+                from appguardrail_core.claude_plugin_detector import (
+                    inspect_claude_plugin_file,
+                )
+
+                plugin_hits = inspect_claude_plugin_file(
+                    name, posix_path, content
+                )
+                if plugin_hits and rel_path_str is None:
+                    rel_path_str = _sanitize_terminal_output(posix_path)
+                for plugin_hit in plugin_hits:
+                    findings.append(
+                        _build_finding(
+                            "appguardrail-rule",
+                            plugin_hit.rule_id,
+                            "HIGH",
+                            plugin_hit.message,
+                            rel_path_str,
+                            plugin_hit.line,
+                            plugin_hit.snippet,
+                        )
+                    )
             if not applicable_rules:
                 return findings
             count_newlines = content.count
@@ -3011,6 +3068,10 @@ def _scan_file(
                 current_pos = 0
 
                 for match in finditer(content):
+                    if rule_id == "hardcoded-password" and not _hardcoded_password_is_literal(
+                        match.group(0)
+                    ):
+                        continue
                     if rel_path_str is None:
                         rel_path_str = _sanitize_terminal_output(
                             _display_path(context.relative_candidate(file_path))
