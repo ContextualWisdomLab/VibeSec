@@ -81,3 +81,6 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+## 2024-05-24 - Custom file input styling and label-in-name
+**Learning:** Native file inputs often behave weirdly across browsers and are hard to style consistently. Replacing them with a visible `<button>` that proxies clicks to a `hidden` `<input type="file">` creates a more cohesive, accessible UX. Furthermore, when the button text explicitly describes the action (e.g., "Upload findings file"), adding an `aria-label` is redundant and should be avoided (the "label-in-name" principle).
+**Action:** Always use styled proxy buttons for file uploads instead of native `<input type="file">` while ensuring the proxy button's text is accessible and avoiding redundant ARIA labels if the visible text is sufficient.

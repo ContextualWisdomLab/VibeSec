@@ -326,7 +326,9 @@ function load(data, srcLabel){
 }
 
 const fileInput = document.getElementById('file');
-document.getElementById('upload-proxy').addEventListener('click', () => fileInput.click());
+document.getElementById('upload-proxy').addEventListener('click', () => {
+  if (fileInput) fileInput.click();
+});
 fileInput.addEventListener('change', () => {
   const selectedFile = fileInput.files?.[0];
   fileInput.value = '';
