@@ -72,14 +72,11 @@ def test_pr_workflows_cancel_only_superseded_heads() -> None:
         assert "github.event.action != 'closed'" in workflow
 
 
-def test_release_workflows_serialize_without_dropping_delivery() -> None:
+def test_release_workflows_do_not_drop_pending_delivery() -> None:
+    """Every release event needs its own run; GitHub concurrency replaces pending runs."""
     for name in RELEASE_WORKFLOWS:
         workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
-        concurrency = _top_level_block(workflow, "concurrency")
-        assert "group: ${{ github.workflow }}-${{ github.repository }}" in concurrency
-        assert "github.run_id" not in concurrency
-        assert "queue: max" in concurrency
-        assert "cancel-in-progress: false" in concurrency
+        assert "\nconcurrency:\n" not in workflow
 
 
 def test_exact_coverage_uses_the_existing_tests_workflow() -> None:
