@@ -81,7 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-
-## 2024-08-31 - Semantic UI State and Visual Parity
-**Learning:** Adding ARIA attributes like `aria-busy="true"` or generic states like `:disabled` provides correct semantics for screen readers, but fails to prevent visual users from interacting unless accompanied by corresponding visual CSS (e.g. `opacity: 0.6`, `cursor: not-allowed`) and JS interaction guards.
-**Action:** Always map ARIA states (like `aria-busy="true"`) to CSS visual styles (`pointer-events: none`, `opacity`) and implement JS event guards (e.g. `if(el.getAttribute('aria-busy') === 'true') return;`) to ensure functional parity between mouse/keyboard users and assistive technologies.
