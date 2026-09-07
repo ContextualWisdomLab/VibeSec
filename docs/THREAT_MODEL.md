@@ -44,6 +44,8 @@ flowchart LR
 | deploy exclusions erase evidence | hidden risk | exclusions affect gate only; finding remains visible |
 | tampered SBOM/report evidence | acquisition/security misstatement | deterministic source/lock provenance and manifest hashes |
 | autonomous model self-approval | governance bypass | developer/reviewer/merge/release authority separation |
+| malicious shared skill (homoglyph name, injected instructions, exfiltration directive) | agent hijack and secret exfiltration | deny-listed skill sync with exact alias matching; catalog/skill text treated as untrusted data, never instructions (#1031) |
+| placeholder template published as an installable skill | discovery pollution and broken installs | reject unresolved placeholder names at sync; workspace state kept out of skill roots (#1031) |
 
 ## Stored SSRF abuse case
 
