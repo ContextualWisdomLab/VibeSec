@@ -26,6 +26,7 @@
   input{font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;min-width:280px}
   button{font:inherit;font-weight:600;padding:8px 14px;border:0;border-radius:8px;background:var(--primary);color:var(--on-primary);cursor:pointer}
   button.ghost{background:var(--surface);color:var(--primary);border:1px solid var(--border)}
+  button:disabled{cursor:not-allowed;opacity:0.7}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:16px}
   .stats{display:flex;gap:12px;flex-wrap:wrap}
   .stat{flex:1;min-width:130px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
@@ -36,6 +37,7 @@
   th{font-size:11px;color:var(--muted);text-transform:uppercase}
   tr.scan{cursor:pointer}
   tr.scan:hover{background:var(--bg)}
+  tr.scan[aria-busy="true"]{pointer-events:none;opacity:0.6}
   input:focus-visible, button:focus-visible, tr.scan:focus-visible, .bar:focus-visible, #detail:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   .close-btn{float:right;border:0;background:transparent;font-size:16px;cursor:pointer;color:var(--muted);padding:0 4px;margin-top:-2px}
   .close-btn:hover{color:var(--text)}
@@ -135,8 +137,8 @@ async function load(){
       <td>${esc(s.created_at)}</td><td>${esc(s.repo||"—")}</td><td><code>${esc((s.commit||"—").slice(0,10))}</code></td>
       <td>${s.total}</td><td>${pill(s.deploy_blocking,"var(--crit)")}</td><td>${pill(s.new_blocking,"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
     document.querySelectorAll("tr.scan").forEach(tr=>{
-      tr.onclick=()=>detail(tr.dataset.id,tr);
-      tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); detail(tr.dataset.id,tr); } });
+      tr.onclick=()=>{ if(tr.getAttribute("aria-busy")==="true") return; detail(tr.dataset.id,tr); };
+      tr.addEventListener('keydown', e => { if(tr.getAttribute("aria-busy")==="true") return; if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); detail(tr.dataset.id,tr); } });
     });
   }catch(e){ $("#msg").classList.remove("hidden");$("#app").classList.add("hidden");
     $("#msg").innerHTML=`<span class="err">${esc(e.message)}</span>`; }
