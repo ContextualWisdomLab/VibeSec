@@ -76,7 +76,7 @@
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const SEV={CRITICAL:"var(--crit)",HIGH:"var(--high)",WARNING:"var(--warn)",INFO:"var(--info)"};
+const SEV=Object.freeze(Object.assign(Object.create(null),{CRITICAL:"var(--crit)",HIGH:"var(--high)",WARNING:"var(--warn)",INFO:"var(--info)"}));
 let KEY=sessionStorage.getItem("ag_key")||"";
 let currentDetailRequest=0;
 let lastDetailFocus=null;
@@ -155,9 +155,13 @@ async function detail(id,tr){
   try{
     const s=await api("/api/v1/scans/"+id);
     if(requestId!==currentDetailRequest)return;
-    const rows=(s.findings||[]).map(f=>`<tr><td><span class="pill" style="background:${SEV[String(f.severity||'INFO').toUpperCase()]||'var(--info)'}">${esc(String(f.severity||'INFO').toUpperCase())}</span></td>
+    const rows=(s.findings||[]).map(f=>{
+      const severity=String(f.severity??"INFO").toUpperCase();
+      const color=SEV[severity]||"var(--info)";
+      return `<tr><td><span class="pill" style="background:${color}">${esc(severity)}</span></td>
       <td><code>${esc(f.rule_id)}</code></td><td>${esc((f.message||"").split("\n")[0].slice(0,120))}</td>
-      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`).join("");
+      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`;
+    }).join("");
     d.innerHTML=`<button type="button" class="close-btn" aria-label="Close details">✕</button><strong>Scan #${esc(s.id)}</strong> <span class="muted">${esc(s.created_at)} · ${esc(s.repo||"—")}</span>
       <table style="margin-top:8px"><thead><tr><th scope="col">Severity</th><th scope="col">Rule</th><th scope="col">Finding</th><th scope="col">Location</th></tr></thead>
       <tbody>${rows||'<tr><td colspan="4" class="muted">No findings.</td></tr>'}</tbody></table>`;
