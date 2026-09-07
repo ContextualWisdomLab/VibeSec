@@ -37,6 +37,10 @@ rules:
         - "**/skill.json"
         - "**/*.skill.md"
         - "**/agent.md"
+        - "**/commands/*.md"
+        - "**/commands/**/*.md"
+        - "**/agents/*.md"
+        - "**/agents/**/*.md"
 
   - id: skill-doc-exfiltration-endpoint-directive
     patterns:
@@ -54,6 +58,10 @@ rules:
         - "**/skill.json"
         - "**/*.skill.md"
         - "**/agent.md"
+        - "**/commands/*.md"
+        - "**/commands/**/*.md"
+        - "**/agents/*.md"
+        - "**/agents/**/*.md"
 
   - id: skill-placeholder-template-unresolved
     patterns:
