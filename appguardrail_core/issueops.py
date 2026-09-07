@@ -21,6 +21,7 @@ DEFAULT_MAX_LOG_CHARS = 30_000
 DEFAULT_MAX_LOG_LINES = 200
 MAX_GITHUB_RUN_ID_DIGITS = 20
 
+LABEL_RE = re.compile(r"[^A-Za-z0-9._:-]+")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TS_RE = re.compile(
     r"^\ufeff?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z[^\S\r\n]*",
@@ -93,7 +94,7 @@ def parse_run_url(url: str) -> tuple[str, int]:
 
 def sanitize_label_value(value: str) -> str:
     """Convert arbitrary repository text into a compact GitHub label suffix."""
-    value = re.sub(r"[^A-Za-z0-9._:-]+", "-", value.strip()).strip("-")
+    value = LABEL_RE.sub("-", value.strip()).strip("-")
     return value[:45] or "unknown"
 
 
