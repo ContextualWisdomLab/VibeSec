@@ -29,9 +29,10 @@ beyond a small depth, fail admission without extracting the payload.
 A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
 not hook scans. Receipts bind ``policy_provenance`` to the running
-AppGuardrail release and the exact scan-policy bytes; verification fails
-closed when that digest or scanner version disagrees. ``scan_result=pass``
-is not Noema admission.
+AppGuardrail release and the exact scan-policy bytes, and ``sbom_sha256``
+to a deterministic CycloneDX document of declared dependencies;
+verification fails closed when that digest or scanner version disagrees.
+``scan_result=pass`` is not Noema admission.
 """
 
 from __future__ import annotations
@@ -605,6 +606,7 @@ class PluginScanReceipt:
     scanned_byte_count: int
     capability_inventory_sha256: str
     sarif_sha256: str
+    sbom_sha256: str
     finding_summary: tuple[str, ...]
     license_evidence_summary: str
     scan_started_at: str
@@ -633,6 +635,7 @@ class PluginScanReceipt:
             "scanned_byte_count": self.scanned_byte_count,
             "capability_inventory_sha256": self.capability_inventory_sha256,
             "sarif_sha256": self.sarif_sha256,
+            "sbom_sha256": self.sbom_sha256,
             "finding_summary": list(self.finding_summary),
             "license_evidence_summary": self.license_evidence_summary,
             "scan_started_at": self.scan_started_at,
@@ -972,7 +975,9 @@ def build_claude_plugin_scan_receipt(
         ``pass`` only when ``.claude-plugin/`` exists and no policy findings
         remain. Secret literals never appear on the receipt. ``policy_provenance``
         binds the running release and the exact policy digest; it is not a
-        second policy hash and is not Noema admission.
+        second policy hash and is not Noema admission. ``sbom_sha256`` is
+        SHA-256 of a deterministic CycloneDX 1.5 document from existing
+        SBOM parsers, not a second policy digest.
     """
     hits = list(_collect_plugin_hits(root))
     catalog = _catalog_identity(catalog_payload)
@@ -995,6 +1000,7 @@ def build_claude_plugin_scan_receipt(
     sarif_sha256 = sarif_document_sha256(
         finding_summary_to_sarif(finding_summary, tool_version=scanner_version)
     )
+    sbom_sha256 = _plugin_sbom_sha256(root)
     is_package = (root / ".claude-plugin").is_dir() and not (
         root / ".claude-plugin"
     ).is_symlink()
@@ -1018,6 +1024,7 @@ def build_claude_plugin_scan_receipt(
         "scanned_byte_count": scanned_byte_count,
         "capability_inventory_sha256": capability_inventory_sha256,
         "sarif_sha256": sarif_sha256,
+        "sbom_sha256": sbom_sha256,
         "finding_summary": list(finding_summary),
         "license_evidence_summary": _license_summary(root),
         "scan_result": scan_result,
@@ -1128,6 +1135,8 @@ def verify_plugin_scan_receipt(
         mismatches.append("scanner_version")
     if receipt.policy_provenance != live.policy_provenance:
         mismatches.append("policy_provenance")
+    if receipt.sbom_sha256 != live.sbom_sha256:
+        mismatches.append("sbom_sha256")
     if receipt.catalog_commit_sha != live.catalog_commit_sha:
         mismatches.append("catalog_commit_sha")
     if receipt.source_commit_sha != live.source_commit_sha:
@@ -2433,6 +2442,57 @@ def _policy_provenance(policy_sha256: str) -> PolicyProvenance:
         source_repository=_SCANNER_SOURCE_REPOSITORY,
         scanner_release_version=_SCANNER_VERSION,
         scanner_policy_sha256=policy_sha256,
+    )
+
+
+def _plugin_sbom_components(root: Path) -> list[dict[str, object]]:
+    """Return sorted CycloneDX components from existing SBOM parsers.
+
+    Malformed or unreadable manifests yield an empty component list rather
+    than crashing the receipt. Lockfile preference stays in
+    ``collect_components``.
+    """
+    from appguardrail_core.sbom import collect_components
+
+    try:
+        components = collect_components(root)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return []
+    return sorted(
+        components,
+        key=lambda item: (
+            str(item.get("name") or ""),
+            str(item.get("version") or ""),
+            str(item.get("purl") or ""),
+        ),
+    )
+
+
+def _plugin_sbom_document(root: Path) -> dict[str, object]:
+    """Return a deterministic CycloneDX 1.5 document for ``root``.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        The existing ``build_sbom`` document with sorted components. The
+        metadata name is the plugin identity or ``claude-plugin``. Secret
+        literals are not copied into the document by this helper.
+    """
+    from appguardrail_core.sbom import build_sbom
+
+    name = _plugin_identity(root)["plugin_name"].strip() or "claude-plugin"
+    return build_sbom(_plugin_sbom_components(root), name)
+
+
+def _plugin_sbom_sha256(root: Path) -> str:
+    """Return SHA-256 of the canonical CycloneDX document for ``root``."""
+    return _sha256(
+        json.dumps(
+            _plugin_sbom_document(root),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
     )
 
 

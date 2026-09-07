@@ -113,3 +113,7 @@
   Honest small zip/tar of plugin.json and LICENSE, ``../`` path
   traversal, and oversized file-count or byte-count trees stay their
   own classes.
+  Receipt ``sbom_sha256`` is SHA-256 of a deterministic CycloneDX 1.5
+  document from the existing SBOM parsers. It is not a second policy
+  digest. Verify fails closed when the digest disagrees. Malformed
+  manifests yield an empty-component SBOM, not a crash.
