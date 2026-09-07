@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -652,3 +653,337 @@ def test_missing_license_fails_package_admission(tmp_path: Path) -> None:
     )
     hits = scan_claude_plugin_package(tmp_path)
     assert any(hit.rule_id == "claude-plugin-license-missing" for hit in hits)
+
+
+_REQUIRED_CAPABILITY_KEYS = (
+    "browser_profile_access",
+    "credential_access",
+    "deployment_write",
+    "filesystem_read",
+    "filesystem_write",
+    "github_merge",
+    "github_read",
+    "github_release",
+    "github_review",
+    "github_write",
+    "mcp_remote_connect",
+    "mcp_server_start",
+    "model_provider_access",
+    "network_egress",
+    "package_install",
+    "process_spawn",
+    "shell_execution",
+)
+
+
+def _inventory_digest(inventory: dict[str, bool]) -> str:
+    """Return the canonical SHA-256 of a capability inventory."""
+    return hashlib.sha256(
+        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _licensed_declared_hook(tmp_path: Path, hook_body: str) -> Path:
+    """Write a pinned licensed plugin with one declared shell hook."""
+    _write_marketplace(
+        tmp_path,
+        {
+            "name": "hook-plugin",
+            "version": "1.0.0",
+            "source": {
+                "source": "github",
+                "repo": "example/hook-plugin",
+                "ref": "a727be1c7bd6064419b6f60d71993a19198adc17",
+            },
+            "hooks": {"PreToolUse": [{"command": "hooks/session.sh"}]},
+        },
+        name="plugin.json",
+    )
+    hook = tmp_path / "hooks" / "session.sh"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(hook_body, encoding="utf-8")
+    (tmp_path / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_declared_shell_hook_inventory_is_evidence_not_permission(
+    tmp_path: Path,
+) -> None:
+    """A pinned licensed plugin with only a declared shell hook may pass."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    inventory = inventory_claude_plugin_capabilities(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert list(inventory) == list(_REQUIRED_CAPABILITY_KEYS)
+    assert all(isinstance(inventory[key], bool) for key in inventory)
+    assert inventory["shell_execution"] is True
+    assert inventory["process_spawn"] is True
+    assert inventory["mcp_remote_connect"] is False
+    assert receipt.scan_result == "pass"
+    assert receipt.finding_summary == ()
+    assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
+    serialized = json.dumps(receipt.as_dict())
+    assert "OPENAI_API_KEY" not in serialized
+    assert "\u202e" not in serialized
+
+
+def test_undeclared_script_after_inventory_fails_admission(tmp_path: Path) -> None:
+    """An extra scripts/hidden.py after manifest inventory fails closed."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        scan_claude_plugin_package,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    hidden = root / "scripts" / "hidden.py"
+    hidden.parent.mkdir()
+    hidden.write_text("print('hidden')\n", encoding="utf-8")
+
+    hits = scan_claude_plugin_package(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    rule_ids = {hit.rule_id for hit in hits}
+
+    assert "claude-plugin-undeclared-executable" in rule_ids
+    assert all("_" in rule_id or "-" in rule_id for rule_id in rule_ids)
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-undeclared-executable" in receipt.finding_summary
+
+
+def test_remote_mcp_url_sets_mcp_remote_connect_and_unbounded_finding(
+    tmp_path: Path,
+) -> None:
+    """A remote MCP URL is inventory evidence and an unbounded finding."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    (root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote": {"url": "https://mcp.example.invalid/sse"}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    inventory = inventory_claude_plugin_capabilities(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert inventory["mcp_remote_connect"] is True
+    assert inventory["mcp_server_start"] is False
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-unbounded-mcp" in receipt.finding_summary
+    assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
+
+
+def test_bounded_stdio_mcp_sets_mcp_server_start_without_inventory_finding(
+    tmp_path: Path,
+) -> None:
+    """Bounded stdio MCP is inventory, not a finding solely for presence."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    (root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "local": {
+                        "command": "python",
+                        "schema": {"type": "object"},
+                        "source": {
+                            "sha": "a727be1c7bd6064419b6f60d71993a19198adc17"
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    inventory = inventory_claude_plugin_capabilities(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert inventory["mcp_server_start"] is True
+    assert inventory["mcp_remote_connect"] is False
+    assert "claude-plugin-unbounded-mcp" not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+
+def test_provider_key_sets_model_and_credential_inventory(
+    tmp_path: Path,
+) -> None:
+    """OPENAI_API_KEY is credential and model-provider evidence plus a finding."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    plugin = root / ".claude-plugin" / "plugin.json"
+    payload = json.loads(plugin.read_text(encoding="utf-8"))
+    payload["env"] = {"OPENAI_API_KEY": "sk-example-must-not-leak"}
+    plugin.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    inventory = inventory_claude_plugin_capabilities(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+    serialized = json.dumps(receipt.as_dict())
+    digest_json = json.dumps(inventory, sort_keys=True, separators=(",", ":"))
+
+    assert inventory["model_provider_access"] is True
+    assert inventory["credential_access"] is True
+    assert "claude-plugin-provider-secret" in receipt.finding_summary
+    assert receipt.scan_result == "fail"
+    assert "sk-example-must-not-leak" not in serialized
+    assert "OPENAI_API_KEY" not in serialized
+    assert "sk-example-must-not-leak" not in digest_json
+    assert "\u202e" not in serialized
+
+
+def test_identical_trees_share_capability_inventory_digest(tmp_path: Path) -> None:
+    """Identical source trees produce the same capability inventory digest."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    first = _licensed_declared_hook(tmp_path / "a", "#!/bin/sh\necho session\n")
+    second = _licensed_declared_hook(tmp_path / "b", "#!/bin/sh\necho session\n")
+    left = build_claude_plugin_scan_receipt(first)
+    right = build_claude_plugin_scan_receipt(second)
+
+    assert inventory_claude_plugin_capabilities(first) == (
+        inventory_claude_plugin_capabilities(second)
+    )
+    assert left.capability_inventory_sha256 == right.capability_inventory_sha256
+    assert left.capability_inventory_sha256 == _inventory_digest(
+        inventory_claude_plugin_capabilities(first)
+    )
+
+
+def test_declared_hook_network_curl_changes_capability_inventory_digest(
+    tmp_path: Path,
+) -> None:
+    """Adding network curl to a declared hook changes the inventory digest."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    quiet = _licensed_declared_hook(tmp_path / "quiet", "#!/bin/sh\necho session\n")
+    networked = _licensed_declared_hook(
+        tmp_path / "networked",
+        "#!/bin/sh\ncurl https://example.invalid/health\n",
+    )
+    quiet_inventory = inventory_claude_plugin_capabilities(quiet)
+    networked_inventory = inventory_claude_plugin_capabilities(networked)
+    quiet_receipt = build_claude_plugin_scan_receipt(quiet)
+    networked_receipt = build_claude_plugin_scan_receipt(networked)
+
+    assert quiet_inventory["network_egress"] is False
+    assert networked_inventory["network_egress"] is True
+    assert quiet_receipt.scan_result == "pass"
+    assert networked_receipt.scan_result == "pass"
+    assert quiet_receipt.finding_summary == networked_receipt.finding_summary == ()
+    assert (
+        quiet_receipt.capability_inventory_sha256
+        != networked_receipt.capability_inventory_sha256
+    )
+
+
+def test_declared_capability_signals_remain_evidence_not_findings(
+    tmp_path: Path,
+) -> None:
+    """GitHub, deploy, package, browser, and filesystem signals are inventory."""
+    from appguardrail_core.claude_plugin_detector import (
+        build_claude_plugin_scan_receipt,
+        inventory_claude_plugin_capabilities,
+    )
+
+    hook_body = "\n".join(
+        [
+            "#!/bin/sh",
+            "cat README.md",
+            "echo data > /tmp/hook-out",
+            "pip install requests",
+            "gh api repos/example/hook-plugin",
+            "gh issue create --title note",
+            "gh pr review 1 --comment -b ok",
+            "gh pr merge 1",
+            "gh release create v1.0.0",
+            "kubectl apply -f deploy.yml",
+            "cp ~/Library/Application\\ Support/Google/Chrome/Default/Cookies /tmp/c",
+            "",
+        ]
+    )
+    root = _licensed_declared_hook(tmp_path, hook_body)
+    inventory = inventory_claude_plugin_capabilities(root)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert inventory["filesystem_read"] is True
+    assert inventory["filesystem_write"] is True
+    assert inventory["package_install"] is True
+    assert inventory["github_read"] is True
+    assert inventory["github_write"] is True
+    assert inventory["github_review"] is True
+    assert inventory["github_merge"] is True
+    assert inventory["github_release"] is True
+    assert inventory["deployment_write"] is True
+    assert inventory["browser_profile_access"] is True
+    assert receipt.scan_result == "pass"
+    assert receipt.finding_summary == ()
+    assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
+
+
+def test_capability_inventory_edges_skip_malformed_and_non_object_manifests(
+    tmp_path: Path,
+) -> None:
+    """Inventory stays boolean and secret-free on malformed MCP and empty files."""
+    from appguardrail_core.claude_plugin_detector import (
+        inventory_claude_plugin_capabilities,
+        scan_claude_plugin_package,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    (root / ".mcp.json").write_text("[]\n", encoding="utf-8")
+    (root / "mcp.json").write_text("{not-json\n", encoding="utf-8")
+    (root / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"mcpServers": ["stdio"]}),
+        encoding="utf-8",
+    )
+    (root / "hooks" / "empty.txt").write_text("", encoding="utf-8")
+    (root / "hooks.json").write_text(
+        json.dumps(
+            {
+                "mcp_servers": {
+                    "broken": "stdio",
+                    "empty-url": {"url": "", "command": ""},
+                    "listed": ["python"],
+                    "remote": {"url": "https://mcp.example.invalid/ok"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    extra_command = root / "commands" / "run.py"
+    extra_command.parent.mkdir()
+    extra_command.write_text("print(1)\n", encoding="utf-8")
+
+    inventory = inventory_claude_plugin_capabilities(root)
+    hits = scan_claude_plugin_package(root)
+
+    assert inventory["mcp_remote_connect"] is True
+    assert inventory["mcp_server_start"] is False
+    assert inventory["process_spawn"] is True
+    assert all(isinstance(inventory[key], bool) for key in inventory)
+    assert any(hit.rule_id == "claude-plugin-undeclared-executable" for hit in hits)
+    assert any(hit.file == "commands/run.py" for hit in hits)

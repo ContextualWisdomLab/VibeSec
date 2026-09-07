@@ -2,7 +2,8 @@
 
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer, or
-undeclared hook is a policy finding. Inventory is evidence, not permission.
+undeclared hook is a policy finding. Capability inventory is evidence, not
+permission: presence of a capability is not a finding by itself.
 """
 
 from __future__ import annotations
@@ -91,7 +92,99 @@ _PIPE_TO_SHELL = re.compile(
 _EXECUTABLE_SUFFIXES = frozenset(
     {".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".py"}
 )
-_HOOK_DIRS = ("hooks", "scripts")
+_SHELL_SUFFIXES: Final = frozenset({".sh", ".bash", ".zsh"})
+_HOOK_DIRS = ("hooks", "scripts", "commands")
+_INVENTORY_MANIFESTS: Final = frozenset(
+    {"plugin.json", "marketplace.json", ".mcp.json", "mcp.json", "hooks.json"}
+)
+CAPABILITY_INVENTORY_KEYS: Final = (
+    "browser_profile_access",
+    "credential_access",
+    "deployment_write",
+    "filesystem_read",
+    "filesystem_write",
+    "github_merge",
+    "github_read",
+    "github_release",
+    "github_review",
+    "github_write",
+    "mcp_remote_connect",
+    "mcp_server_start",
+    "model_provider_access",
+    "network_egress",
+    "package_install",
+    "process_spawn",
+    "shell_execution",
+)
+_TEXT_CAPABILITY_PATTERNS: Final = (
+    (
+        "browser_profile_access",
+        re.compile(
+            r"Google/Chrome|Chromium|Firefox|cookies\.sqlite|Login Data",
+            re.IGNORECASE,
+        ),
+    ),
+    ("credential_access", _PROVIDER_SECRET),
+    (
+        "deployment_write",
+        re.compile(
+            r"\b(?:kubectl\s+apply|terraform\s+apply|helm\s+install|"
+            r"vercel\s+deploy|fly\s+deploy|docker\s+push)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "filesystem_read",
+        re.compile(r"\b(?:cat|read_text|read_bytes|Get-Content)\b"),
+    ),
+    (
+        "filesystem_write",
+        re.compile(
+            r"\b(?:write_text|write_bytes|mkdir)\b|(?:^|\s)>\s*\S",
+            re.MULTILINE,
+        ),
+    ),
+    ("github_merge", re.compile(r"\bgh\s+pr\s+merge\b", re.IGNORECASE)),
+    (
+        "github_read",
+        re.compile(
+            r"\bgh\s+(?:api|issue\s+list|pr\s+view|repo\s+view)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("github_release", re.compile(r"\bgh\s+release\b", re.IGNORECASE)),
+    ("github_review", re.compile(r"\bgh\s+pr\s+review\b", re.IGNORECASE)),
+    (
+        "github_write",
+        re.compile(
+            r"\bgh\s+(?:issue\s+create|pr\s+create|repo\s+create)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("model_provider_access", _PROVIDER_SECRET),
+    (
+        "network_egress",
+        re.compile(r"\b(?:curl|wget|fetch)\b|https?://", re.IGNORECASE),
+    ),
+    (
+        "package_install",
+        re.compile(
+            r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "process_spawn",
+        re.compile(r"\b(?:subprocess|os\.system|Popen|posix_spawn)\b"),
+    ),
+    (
+        "shell_execution",
+        re.compile(
+            r"^#![^\n]*(?:ba)?sh\b|\b(?:bash|zsh)\s+-c\b",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +255,44 @@ class PluginScanReceipt:
         }
 
 
+def inventory_claude_plugin_capabilities(root: Path) -> dict[str, bool]:
+    """Return a machine-readable capability inventory for one plugin tree.
+
+    Inventory is evidence, not permission. A true capability is not a policy
+    finding by itself and does not authorize admission or activation.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Mapping of every inventory key to a boolean, in deterministic key
+        order. Secret literals never appear in the mapping.
+    """
+    inventory = _empty_capability_inventory()
+    texts: list[str] = []
+    for path in _walk_entries(root):
+        if path.is_symlink():
+            continue
+        suffix = path.suffix.lower()
+        if suffix in _SHELL_SUFFIXES:
+            inventory["shell_execution"] = True
+            inventory["process_spawn"] = True
+        elif suffix in _EXECUTABLE_SUFFIXES:
+            inventory["process_spawn"] = True
+        payload = _regular_file_bytes(path)
+        if not payload:
+            continue
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        texts.append(text)
+        if path.name in _INVENTORY_MANIFESTS:
+            _inventory_manifest_capabilities(text, inventory)
+    _inventory_text_capabilities("\n".join(texts), inventory)
+    return {key: inventory[key] for key in CAPABILITY_INVENTORY_KEYS}
+
+
 def inspect_claude_plugin_file(
     filename: str,
     relative_path: str,
@@ -210,8 +341,9 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         root: Scan root that may contain ``.claude-plugin/``.
 
     Returns:
-        Undeclared executable and symlink findings. Empty when the tree is not
-        a plugin package or every hook is a declared regular file.
+        Undeclared executable, license, size, and symlink findings. Empty when
+        the tree is not a plugin package or every hook is a declared regular
+        file. Inventory presence is not a finding.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -313,9 +445,8 @@ def build_claude_plugin_scan_receipt(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     )
     policy_sha256 = _sha256(Path(__file__).read_bytes())
-    capability_inventory_sha256 = _sha256(
-        json.dumps(finding_summary, separators=(",", ":")).encode()
-    )
+    inventory = inventory_claude_plugin_capabilities(root)
+    capability_inventory_sha256 = _capability_inventory_digest(inventory)
     sarif_sha256 = _sha256(
         json.dumps(
             [
@@ -378,6 +509,54 @@ def receipt_matches_artifact(receipt: PluginScanReceipt, root: Path) -> bool:
     return artifact_sha256 == receipt.artifact_sha256 and (
         receipt.scanner_policy_sha256 == _sha256(Path(__file__).read_bytes())
     )
+
+
+def _empty_capability_inventory() -> dict[str, bool]:
+    """Return every inventory key as false, in deterministic order."""
+    return {key: False for key in CAPABILITY_INVENTORY_KEYS}
+
+
+def _capability_inventory_digest(inventory: dict[str, bool]) -> str:
+    """Return SHA-256 of the canonical JSON capability inventory."""
+    return _sha256(
+        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+
+def _inventory_manifest_capabilities(
+    content: str, inventory: dict[str, bool]
+) -> None:
+    """Mark MCP and process capabilities declared in one JSON manifest."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict):
+        return
+    servers = payload.get("mcpServers") or payload.get("mcp_servers") or {}
+    if isinstance(servers, dict):
+        for server in servers.values():
+            if not isinstance(server, dict):
+                continue
+            remote_url = server.get("url")
+            if isinstance(remote_url, str) and remote_url:
+                inventory["mcp_remote_connect"] = True
+                inventory["network_egress"] = True
+            command = server.get("command")
+            if isinstance(command, str) and command:
+                inventory["mcp_server_start"] = True
+                inventory["process_spawn"] = True
+    if payload.get("hooks"):
+        inventory["process_spawn"] = True
+
+
+def _inventory_text_capabilities(content: str, inventory: dict[str, bool]) -> None:
+    """Mark text-derived capabilities without recording secret literals."""
+    if not content:
+        return
+    for key, pattern in _TEXT_CAPABILITY_PATTERNS:
+        if pattern.search(content):
+            inventory[key] = True
 
 
 def _is_manifest(filename: str, posix: str) -> bool:
