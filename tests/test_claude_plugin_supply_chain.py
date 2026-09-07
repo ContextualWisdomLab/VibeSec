@@ -881,3 +881,48 @@ def test_declared_capability_signals_remain_evidence_not_findings(
     assert receipt.scan_result == "pass"
     assert receipt.finding_summary == ()
     assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
+
+
+def test_capability_inventory_edges_skip_malformed_and_non_object_manifests(
+    tmp_path: Path,
+) -> None:
+    """Inventory stays boolean and secret-free on malformed MCP and empty files."""
+    from appguardrail_core.claude_plugin_detector import (
+        inventory_claude_plugin_capabilities,
+        scan_claude_plugin_package,
+    )
+
+    root = _licensed_declared_hook(tmp_path, "#!/bin/sh\necho session\n")
+    (root / ".mcp.json").write_text("[]\n", encoding="utf-8")
+    (root / "mcp.json").write_text("{not-json\n", encoding="utf-8")
+    (root / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"mcpServers": ["stdio"]}),
+        encoding="utf-8",
+    )
+    (root / "hooks" / "empty.txt").write_text("", encoding="utf-8")
+    (root / "hooks.json").write_text(
+        json.dumps(
+            {
+                "mcp_servers": {
+                    "broken": "stdio",
+                    "empty-url": {"url": "", "command": ""},
+                    "listed": ["python"],
+                    "remote": {"url": "https://mcp.example.invalid/ok"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    extra_command = root / "commands" / "run.py"
+    extra_command.parent.mkdir()
+    extra_command.write_text("print(1)\n", encoding="utf-8")
+
+    inventory = inventory_claude_plugin_capabilities(root)
+    hits = scan_claude_plugin_package(root)
+
+    assert inventory["mcp_remote_connect"] is True
+    assert inventory["mcp_server_start"] is False
+    assert inventory["process_spawn"] is True
+    assert all(isinstance(inventory[key], bool) for key in inventory)
+    assert any(hit.rule_id == "claude-plugin-undeclared-executable" for hit in hits)
+    assert any(hit.file == "commands/run.py" for hit in hits)
