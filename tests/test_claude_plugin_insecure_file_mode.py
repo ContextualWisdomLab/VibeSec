@@ -142,19 +142,58 @@ def test_symlink_hook_is_not_a_mode_finding(tmp_path: Path) -> None:
     assert _WORLD_RULE not in receipt.finding_summary
 
 
+def test_setuid_python_outside_hook_dirs_fails_admission(tmp_path: Path) -> None:
+    """A setuid ``.py`` at the package root is still this class."""
+    root = _licensed_plugin(tmp_path)
+    script = root / "install.py"
+    script.write_text("print('install')\n", encoding="utf-8")
+    script.chmod(0o4755)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert receipt.scan_result == "fail"
+    assert _SETUID_RULE in receipt.finding_summary
+
+
+def test_git_hook_setuid_is_not_plugin_mode_finding(tmp_path: Path) -> None:
+    """``.git/hooks`` stays Git metadata, not a plugin setuid finding."""
+    root = _licensed_plugin(tmp_path)
+    git_hook = root / ".git" / "hooks" / "pre-commit.sh"
+    git_hook.parent.mkdir(parents=True, exist_ok=True)
+    git_hook.write_text("#!/bin/sh\necho git\n", encoding="utf-8")
+    git_hook.chmod(0o4755)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _SETUID_RULE not in receipt.finding_summary
+    assert _WORLD_RULE not in receipt.finding_summary
+
+
+def test_mcp_json_under_hooks_is_not_a_mode_finding(tmp_path: Path) -> None:
+    """``.mcp.json`` stays the MCP class even under ``hooks/``."""
+    root = _licensed_plugin(tmp_path)
+    mcp = root / "hooks" / ".mcp.json"
+    mcp.write_text("{}\n", encoding="utf-8")
+    mcp.chmod(0o666)
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _WORLD_RULE not in receipt.finding_summary
+    assert _SETUID_RULE not in receipt.finding_summary
+
+
 def test_mode_stat_errors_are_skipped(tmp_path: Path, monkeypatch) -> None:
     """Unreadable mode bits are skipped rather than failing open as pass."""
+    import os
+
     from appguardrail_core import claude_plugin_detector as detector
 
     root = _licensed_plugin(tmp_path)
     hook = root / "hooks" / "session.sh"
-    original_stat = Path.stat
+    original_lstat = os.lstat
 
-    def fake_stat(self: Path, *args: object, **kwargs: object):
-        if self == hook:
+    def fake_lstat(target, *args, **kwargs):
+        if os.fspath(target) == os.fspath(hook):
             raise OSError("unreadable")
-        return original_stat(self, *args, **kwargs)
+        return original_lstat(target, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "stat", fake_stat)
+    monkeypatch.setattr(os, "lstat", fake_lstat)
     hits = detector._insecure_file_mode_hits(root)
     assert hits == ()
