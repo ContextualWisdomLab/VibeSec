@@ -65,6 +65,11 @@ CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
     "budget. Hostile oversized trees fail admission. "
     "[CWE-400 - Uncontrolled Resource Consumption]"
 )
+CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE: Final = (
+    "Claude plugin marketplace identity does not match the retrieved artifact "
+    "ref, repository, or source path. Bind admission to one exact object. "
+    "[CWE-494 - Download of Code Without Integrity Check]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
@@ -243,6 +248,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 file=".claude-plugin",
             )
         )
+    hits.extend(_source_mismatch_hits(root))
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -649,43 +655,108 @@ def _license_summary(root: Path) -> str:
     return ",".join(names) if names else "absent"
 
 
-def _plugin_identity(root: Path) -> dict[str, str]:
-    """Return bounded plugin identity fields from the local manifest."""
-    identity = {
+def _empty_identity() -> dict[str, str]:
+    """Return blank plugin identity fields."""
+    return {
         "plugin_name": "",
         "plugin_version": "",
         "source_repository": "",
         "source_commit_sha": "",
         "source_path": "",
     }
-    for name in ("plugin.json", "marketplace.json"):
-        path = root / ".claude-plugin" / name
-        payload_bytes = _regular_file_bytes(path)
-        if not payload_bytes:
-            continue
-        try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        entries = list(_plugin_entries(payload))
-        if not entries:
-            continue
-        entry = entries[0]
-        identity["plugin_name"] = str(entry.get("name") or payload.get("name") or "")
-        identity["plugin_version"] = str(
-            entry.get("version") or payload.get("version") or ""
-        )
-        source = entry.get("source")
-        if isinstance(source, dict):
-            repo = source.get("repo") or source.get("source")
-            identity["source_repository"] = repo if isinstance(repo, str) else ""
-            identity["source_commit_sha"] = _source_ref(entry) or ""
-            path_value = source.get("path")
-            identity["source_path"] = path_value if isinstance(path_value, str) else ""
-        elif isinstance(entry.get("ref"), str):
-            identity["source_commit_sha"] = entry["ref"]
+
+
+def _identity_from_payload(payload: object) -> dict[str, str]:
+    """Return bounded identity from one parsed marketplace or plugin document."""
+    identity = _empty_identity()
+    entries = list(_plugin_entries(payload))
+    if not entries:
         return identity
+    entry = entries[0]
+    name = entry.get("name")
+    if not isinstance(name, str) and isinstance(payload, dict):
+        name = payload.get("name")
+    identity["plugin_name"] = name if isinstance(name, str) else ""
+    version = entry.get("version")
+    if not isinstance(version, str) and isinstance(payload, dict):
+        version = payload.get("version")
+    identity["plugin_version"] = version if isinstance(version, str) else ""
+    source = entry.get("source")
+    if isinstance(source, dict):
+        repo = source.get("repo") or source.get("source")
+        identity["source_repository"] = repo if isinstance(repo, str) else ""
+        identity["source_commit_sha"] = _source_ref(entry) or ""
+        path_value = source.get("path")
+        identity["source_path"] = path_value if isinstance(path_value, str) else ""
+        return identity
+    if isinstance(entry.get("ref"), str):
+        identity["source_commit_sha"] = entry["ref"]
     return identity
+
+
+def _identity_from_file(path: Path) -> dict[str, str]:
+    """Return identity from one regular JSON file, or blanks on parse failure."""
+    payload_bytes = _regular_file_bytes(path)
+    if not payload_bytes:
+        return _empty_identity()
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _empty_identity()
+    return _identity_from_payload(payload)
+
+
+def _source_mismatch_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return hits when catalog identity disagrees with the retrieved artifact."""
+    plugin = _identity_from_file(root / ".claude-plugin" / "plugin.json")
+    market = _identity_from_file(root / ".claude-plugin" / "marketplace.json")
+    hits: list[PluginHit] = []
+    for field in ("source_commit_sha", "source_repository"):
+        left, right = plugin[field], market[field]
+        if left and right and left != right:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-source-mismatch",
+                    line=1,
+                    snippet=field,
+                    message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+                    file=".claude-plugin/plugin.json",
+                )
+            )
+            break
+    path_value = plugin["source_path"] or market["source_path"]
+    if path_value:
+        parts = Path(path_value).parts
+        if path_value.startswith("/") or ".." in parts:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-source-mismatch",
+                    line=1,
+                    snippet="source.path",
+                    message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+                    file=".claude-plugin/plugin.json",
+                )
+            )
+        elif not (root / path_value).exists():
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-source-mismatch",
+                    line=1,
+                    snippet="source.path",
+                    message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+                    file=".claude-plugin/plugin.json",
+                )
+            )
+    return tuple(hits)
+
+
+def _plugin_identity(root: Path) -> dict[str, str]:
+    """Return bounded plugin identity fields from the local manifest."""
+    for name in ("plugin.json", "marketplace.json"):
+        identity = _identity_from_file(root / ".claude-plugin" / name)
+        if any(identity.values()):
+            return identity
+    return _empty_identity()
 
 
 def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
