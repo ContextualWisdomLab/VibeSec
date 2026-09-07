@@ -177,6 +177,35 @@ def _none_aware_guard_source():
     )
 
 
+def _internally_validated_sink_source(*, conditional=False, rebound=False):
+    """Build a route whose local persistence function owns validation."""
+    condition = (
+        "disabled and not _is_safe_url(normalized_url)"
+        if conditional
+        else "normalized_url is not None and not _is_safe_url(normalized_url)"
+    )
+    lines = [
+            "def set_webhook(conn, org, url, disabled=False):",
+            '    """Persist a validated webhook destination."""',
+            '    normalized_url = None if isinstance(url, str) and url == "" else url',
+            f"    if {condition}:",
+            '        raise ValueError("unsafe webhook url")',
+            '    conn.execute("UPDATE orgs SET webhook_url = ?", (normalized_url,))',
+            "",
+        ]
+    if rebound:
+        lines.extend(["set_webhook = unsafe_set_webhook", ""])
+    lines.extend(
+        [
+            "def update_webhook(conn, org, body):",
+            '    webhook_url = body.get("url")',
+            "    set_webhook(conn, org, webhook_url)",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _scan_rule_findings(tmp_path, source):
     """Run the real file scanner and return only stored-SSRF findings."""
     source_file = tmp_path / "webhook.py"
@@ -325,3 +354,26 @@ def test_scan_file_emits_finding_for_non_enforcing_guard(tmp_path):
 def test_scan_file_does_not_flag_validated_path(tmp_path):
     """Suppress the finding for a verified fail-closed persistence path."""
     assert not _scan_rule_findings(tmp_path, _safe_source())
+
+
+def test_scan_file_accepts_validation_owned_by_local_sink(tmp_path):
+    """Accept a top-level sink that rejects unsafe input before persistence."""
+    assert not _scan_rule_findings(tmp_path, _internally_validated_sink_source())
+
+
+def test_scan_file_rejects_conditionally_validated_local_sink(tmp_path):
+    """Do not trust sink validation gated by an unrelated condition."""
+    findings = _scan_rule_findings(
+        tmp_path, _internally_validated_sink_source(conditional=True)
+    )
+
+    assert len(findings) == 1
+
+
+def test_scan_file_rejects_rebound_local_sink(tmp_path):
+    """Do not transfer a definition's safety after the sink name is rebound."""
+    findings = _scan_rule_findings(
+        tmp_path, _internally_validated_sink_source(rebound=True)
+    )
+
+    assert len(findings) == 1

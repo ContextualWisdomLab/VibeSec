@@ -40,6 +40,7 @@ Options:
 """
 
 import argparse
+import ast
 import fnmatch
 import functools
 import importlib.resources as resources  # nosemgrep: python.lang.compatibility.python37.python37-compatibility-importlib2
@@ -2916,6 +2917,123 @@ def _run_codegraph_index(scan_path: Path):
     return _run_codegraph_command([codegraph, "status"], workdir, "status")
 
 
+def _is_fail_closed_url_guard(test, validated_names):
+    """Return whether ``test`` rejects an unsafe validated local unconditionally."""
+    terms = (
+        test.values
+        if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And)
+        else [test]
+    )
+    unsafe_guard = False
+    for term in terms:
+        if (
+            isinstance(term, ast.UnaryOp)
+            and isinstance(term.op, ast.Not)
+            and isinstance(term.operand, ast.Call)
+            and isinstance(term.operand.func, ast.Name)
+            and term.operand.func.id == "_is_safe_url"
+            and len(term.operand.args) == 1
+            and isinstance(term.operand.args[0], ast.Name)
+            and term.operand.args[0].id in validated_names
+        ):
+            unsafe_guard = True
+        elif not (
+            isinstance(term, ast.Compare)
+            and isinstance(term.left, ast.Name)
+            and term.left.id in validated_names
+            and len(term.ops) == 1
+            and isinstance(term.ops[0], ast.IsNot)
+            and len(term.comparators) == 1
+            and isinstance(term.comparators[0], ast.Constant)
+            and term.comparators[0].value is None
+        ):
+            return False
+    return unsafe_guard
+
+
+def _has_fail_closed_local_webhook_sink(content):
+    """Recognize a top-level ``set_webhook`` that validates before SQLite use."""
+    try:
+        module = ast.parse(content)
+    except (SyntaxError, ValueError):
+        return False
+
+    definitions = [
+        statement
+        for statement in module.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and statement.name == "set_webhook"
+    ]
+    if len(definitions) != 1:
+        return False
+    function = definitions[0]
+    for later in module.body[module.body.index(function) + 1 :]:
+        if (
+            isinstance(later, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "set_webhook"
+                for target in later.targets
+            )
+        ) or (
+            isinstance(later, (ast.AnnAssign, ast.AugAssign))
+            and isinstance(later.target, ast.Name)
+            and later.target.id == "set_webhook"
+        ):
+            return False
+
+    for function in definitions:
+        validated_names = {argument.arg for argument in function.args.args}
+        for index, statement in enumerate(function.body):
+            if (
+                index == 0
+                and isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.IfExp)
+                and isinstance(statement.value.body, ast.Constant)
+                and statement.value.body.value is None
+                and isinstance(statement.value.orelse, ast.Name)
+                and statement.value.orelse.id in validated_names
+            ):
+                validated_names.add(statement.targets[0].id)
+                continue
+            if (
+                isinstance(statement, ast.If)
+                and statement.body
+                and isinstance(statement.body[0], (ast.Raise, ast.Return))
+                and _is_fail_closed_url_guard(statement.test, validated_names)
+            ):
+                guarded_name = next(
+                    node.args[0].id
+                    for node in ast.walk(statement.test)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "_is_safe_url"
+                    and node.args
+                    and isinstance(node.args[0], ast.Name)
+                )
+                return any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "execute"
+                    and any(
+                        isinstance(value, ast.Name) and value.id == guarded_name
+                        for argument in node.args
+                        for value in ast.walk(argument)
+                    )
+                    for later in function.body[index + 1 :]
+                    for node in ast.walk(later)
+                )
+            return False
+    return False
+
+
 def _scan_file(
     file_path: Path,
     base_path: Path,
@@ -2988,6 +3106,11 @@ def _scan_file(
                         rel_path_for_filters, include_paths, exclude_paths
                     ):
                         continue
+                if (
+                    rule_id == "python-stored-ssrf-webhook-url"
+                    and _has_fail_closed_local_webhook_sink(content)
+                ):
+                    continue
                 # ⚡ Bolt: Progressive line counting for O(N) instead of O(N*M)
                 # finditer yields matches in order, allowing us to scan for newlines
                 # incrementally from the last known position rather than starting from 0.
