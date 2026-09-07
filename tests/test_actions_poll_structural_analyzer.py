@@ -17,6 +17,7 @@ from appguardrail_core.actions_poll_analyzer import (
     TRANSPORT_FAILURE_BUDGET_POLL_BOUND,
     TRANSPORT_ONLY_POLL_BOUND,
     PollLoopAssessment,
+    additional_poll_bound_rule_ids,
     classify_poll_loops,
     poll_bound_rule_ids,
 )
@@ -719,5 +720,86 @@ def test_then_without_if_and_le_deadline_remain_unbounded() -> None:
 
     assert item.comparison_converges is False
     assert item.is_transport_only_unbounded is True
+
+
+def test_additional_poll_bound_rule_ids_skips_regex_hits_for_the_same_file() -> None:
+    """File-scoped merge keeps the packaged identity when regex already reported it."""
+    workflow = _HISTORICAL_VULN.read_text(encoding="utf-8")
+
+    assert additional_poll_bound_rule_ids(workflow) == (TRANSPORT_ONLY_POLL_BOUND,)
+    assert additional_poll_bound_rule_ids(
+        workflow, (TRANSPORT_ONLY_POLL_BOUND,)
+    ) == ()
+    assert additional_poll_bound_rule_ids(
+        _HISTORICAL_FIXED.read_text(encoding="utf-8")
+    ) == ()
+
+
+def test_additional_poll_bound_rule_ids_emits_each_identity_once() -> None:
+    """Two unbounded loops of the same family still contribute one rule ID."""
+    other = """  sibling-poll:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          review_poll_failures=0
+          max_poll_transport_failures=3
+          while :; do
+            if ! reviews="$(gh api repos/example/repo/pulls/2/reviews)"; then
+              review_poll_failures=$((review_poll_failures + 1))
+              if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
+                exit 1
+              fi
+              continue
+            fi
+            review_poll_failures=0
+            sleep 30
+          done
+"""
+    workflow = _workflow(_historical_transport_shell(), extra_jobs=other)
+    ids = poll_bound_rule_ids(_polls(workflow))
+
+    assert ids == (TRANSPORT_ONLY_POLL_BOUND, TRANSPORT_ONLY_POLL_BOUND)
+    assert additional_poll_bound_rule_ids(workflow) == (TRANSPORT_ONLY_POLL_BOUND,)
+    assert additional_poll_bound_rule_ids(
+        workflow, (TRANSPORT_ONLY_POLL_BOUND,)
+    ) == ()
+
+
+def test_additional_poll_bound_rule_ids_keeps_renamed_budget_identity() -> None:
+    """Renamed transport budgets stay on the identifier-agnostic packaged ID."""
+    workflow = _workflow(_renamed_transport_shell())
+
+    assert additional_poll_bound_rule_ids(workflow) == (
+        TRANSPORT_FAILURE_BUDGET_POLL_BOUND,
+    )
+    assert additional_poll_bound_rule_ids(
+        workflow, (TRANSPORT_FAILURE_BUDGET_POLL_BOUND,)
+    ) == ()
+
+
+@pytest.mark.parametrize("terminator", ["break", "exit", "exit 0", "exit 1", "return"])
+def test_unconditional_success_path_terminator_is_finite(terminator: str) -> None:
+    """A reachable top-level transfer removes the polling back edge."""
+    extra = f"  {terminator}"
+    shell = _historical_transport_shell(extra_in_loop=extra)
+
+    item = _polls(_workflow(shell))[0]
+
+    assert item.transport_failure_budget is True
+    assert item.is_transport_only_unbounded is False
+    assert additional_poll_bound_rule_ids(_workflow(shell)) == ()
+
+
+def test_top_level_continue_does_not_terminate_the_poll() -> None:
+    """A top-level continue skips later commands and repeats the loop."""
+    extra = "  continue\n  break"
+    shell = _historical_transport_shell(extra_in_loop=extra)
+
+    item = _polls(_workflow(shell))[0]
+
+    assert item.is_transport_only_unbounded is True
+    assert additional_poll_bound_rule_ids(_workflow(shell)) == (
+        TRANSPORT_ONLY_POLL_BOUND,
+    )
 
 

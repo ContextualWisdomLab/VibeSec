@@ -88,6 +88,7 @@ from appguardrail_core.reports import (
     render_report,
     supported_report_types,
 )
+from appguardrail_core.actions_poll_analyzer import additional_poll_bound_rule_ids
 from appguardrail_core.rules import build_rule_metadata
 from appguardrail_core.scan_paths import ScanPathContext, build_scan_path_context
 
@@ -2916,6 +2917,53 @@ def _run_codegraph_index(scan_path: Path):
     return _run_codegraph_command([codegraph, "status"], workdir, "status")
 
 
+_POLL_WORKFLOW_INCLUDE = (
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+)
+
+
+def _poll_analyzer_location(content: str) -> tuple[int, str]:
+    """Return a display line and snippet for an analyzer-only poll finding."""
+    for index, raw_line in enumerate(content.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if stripped.startswith("while"):
+            return index, stripped[:120]
+    return 1, ""
+
+
+def _append_actions_poll_analyzer_findings(
+    content: str, findings: list, rel_path_str: str, build_finding
+) -> None:
+    """Append structural poll-bound findings not already present for this file.
+
+    Merge is keyed by ``(rule_id, file)``. Regex hits keep their packaged
+    identity; the classifier adds an ID only when that identity is absent.
+    """
+    extra_ids = additional_poll_bound_rule_ids(
+        content, tuple(item["rule_id"] for item in findings)
+    )
+    if not extra_ids:
+        return
+    templates = {
+        rule["id"]: rule for rule in SCAN_RULES if rule["id"] in extra_ids
+    }
+    line_num, snippet = _poll_analyzer_location(content)
+    for rule_id in extra_ids:
+        rule = templates[rule_id]
+        findings.append(
+            build_finding(
+                "appguardrail-rule",
+                rule_id,
+                rule["severity"],
+                rule["message"],
+                rel_path_str,
+                line_num,
+                snippet,
+            )
+        )
+
+
 def _scan_file(
     file_path: Path,
     base_path: Path,
@@ -2927,6 +2975,10 @@ def _scan_file(
     Direct callers may omit ``path_context`` and retain the historical safe
     fallback. Batch callers should build one context and reuse it for every
     file so root classification and normalized prefix construction happen once.
+
+    GitHub Actions workflow paths also run the structural poll-loop classifier.
+    Analyzer identities merge with regex hits by ``(rule_id, file)`` so the
+    packaged transport-only family is emitted once.
     """
     findings = []
     context = path_context or build_scan_path_context(base_path)
@@ -3026,6 +3078,21 @@ def _scan_file(
                             line_num,
                             snippet,
                         )
+                    )
+            if ext in {".yml", ".yaml"}:
+                if rel_path_for_filters is None:
+                    rel_path_for_filters = _display_path(
+                        context.relative_candidate(file_path)
+                    )
+                if _path_allowed_by_rule(
+                    rel_path_for_filters, _POLL_WORKFLOW_INCLUDE, ()
+                ):
+                    if rel_path_str is None:
+                        rel_path_str = _sanitize_terminal_output(
+                            _display_path(context.relative_candidate(file_path))
+                        )
+                    _append_actions_poll_analyzer_findings(
+                        content, findings, rel_path_str, build_finding
                     )
     except (OSError, PermissionError):
         pass

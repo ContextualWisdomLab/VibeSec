@@ -140,6 +140,34 @@ def poll_bound_rule_ids(assessments: tuple[PollLoopAssessment, ...]) -> tuple[st
     return tuple(rule_ids)
 
 
+def additional_poll_bound_rule_ids(
+    workflow_text: str,
+    existing_rule_ids: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return poll-bound rule IDs not already reported for the same file.
+
+    Merge is keyed by rule identity. Regex hits for an existing detector ID
+    are preserved; the classifier contributes an ID only when that identity
+    is absent so a file cannot double-count the packaged #1088 corpus.
+
+    Args:
+        workflow_text: Complete workflow document text.
+        existing_rule_ids: Detector identities already emitted for this file.
+
+    Returns:
+        Existing packaged rule IDs in first-seen analyzer order.
+    """
+    already = set(existing_rule_ids)
+    extra: list[str] = []
+    seen: set[str] = set()
+    for rule_id in poll_bound_rule_ids(classify_poll_loops(workflow_text)):
+        if rule_id in already or rule_id in seen:
+            continue
+        seen.add(rule_id)
+        extra.append(rule_id)
+    return tuple(extra)
+
+
 def _is_positive_timeout(value: str) -> bool:
     """Return whether a timeout-minutes value is a static positive bound."""
     stripped = value.split("#", 1)[0].strip()
@@ -231,6 +259,7 @@ def _classify_shell(job_name: str, shell: str, owning_timeout: bool) -> tuple[Po
         converges, exit_reachable = _total_bound_flags(assignments, frames, top_commands)
         loop_local = converges and exit_reachable
         historical = _uses_historical_names(assignments, commands)
+        terminates = _success_path_terminates(top_commands)
         assessments.append(
             PollLoopAssessment(
                 job_name=job_name,
@@ -239,7 +268,12 @@ def _classify_shell(job_name: str, shell: str, owning_timeout: bool) -> tuple[Po
                 owning_job_timeout=owning_timeout,
                 comparison_converges=converges,
                 exit_reachable=exit_reachable,
-                is_transport_only_unbounded=transport and not loop_local and not owning_timeout,
+                is_transport_only_unbounded=(
+                    transport
+                    and not loop_local
+                    and not owning_timeout
+                    and not terminates
+                ),
                 historical_transport_names=historical,
             )
         )
@@ -467,6 +501,20 @@ def _walk_if_frames(commands: tuple[str, ...]) -> tuple[tuple[_IfFrame, ...], tu
             continue
         top.append(command)
     return tuple(completed), tuple(top)
+
+
+def _success_path_terminates(top_commands: tuple[str, ...]) -> bool:
+    """Return whether a reachable top-level transfer ends the poll.
+
+    An unconditional ``break``, ``exit``, or ``return`` removes the back edge.
+    A top-level ``continue`` skips the rest of the body and repeats the loop.
+    """
+    for command in top_commands:
+        if _TRANSFER.fullmatch(command):
+            return not command.startswith("continue")
+        if _FAIL_EXIT.fullmatch(command):
+            return True
+    return False
 
 
 def _has_transport_failure_budget(frames: tuple[_IfFrame, ...], top_commands: tuple[str, ...]) -> bool:
