@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### 거버넌스
+- GitHub Actions 레지스트리 감사가 Copilot, Dependabot, CodeQL의 검증된 `dynamic/...` workflow를 소스 삭제 오탐으로 처리하지 않습니다. 두 번의 bounded pagination 모두 안정적인 `total_count`와 완전한 record 수를 요구하고, 결과 또는 기본 브랜치·커밋·트리가 달라지거나 tree entry가 불완전하면 fail-closed 처리하며, GitHub 저장소 이름의 대소문자 alias는 같은 identity로 검증합니다.
+- 문자열 경로의 언어 감지가 Python 버전별 `pathlib` 차이와 무관하게 `.py`로 끝나는 파일을 Python 보안 검사에 포함합니다.
+
 ### 사용자 경험 (UX)
 - 검색창 포커스 전체 키보드 단축키(`/`) 추가 — 단축키가 `<input>`, `<textarea>`, `<select>` 및 `isContentEditable` 요소 외부에서만 작동하도록 제한하여 입력 간섭을 방지하고, 접근성을 위한 힌트 속성(`title`, `aria-keyshortcuts`)을 추가했습니다.
 - 대시보드 검색창 커서 유지 — 검색어 중간에서 텍스트를 수정할 때마다 커서가 검색어의 맨 끝으로 점프하는 불편함을 수정했습니다. 이제 입력창의 커서 위치(`selectionStart`/`selectionEnd`)가 동적 렌더링 이후에도 원래 위치에 정확히 유지되어 자연스러운 타이핑 경험을 제공합니다.

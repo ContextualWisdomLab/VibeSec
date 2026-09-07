@@ -26,7 +26,6 @@ class StringPath(str):
         "src/page.html",
         "src/archive.tar.py",
         "src/.hidden.py",
-        "src/....py",
         "src/trailing.py.",
         "package.json",
         "nested/tsconfig.json",
@@ -37,6 +36,11 @@ class StringPath(str):
 def test_string_path_language_detection_matches_path_objects(path_text: str) -> None:
     """The optimized string path must preserve the declared Path input contract."""
     assert detect_language_axes([path_text]) == detect_language_axes([Path(path_text)])
+
+
+def test_all_dot_stem_keeps_a_stable_security_scan_extension() -> None:
+    """Python-looking files cannot evade scanning through version-specific Path rules."""
+    assert detect_language_axes(["src/....py"]) == {"python"}
 
 
 def test_string_subclass_uses_string_language_detection_branch() -> None:
