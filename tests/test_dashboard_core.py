@@ -30,6 +30,19 @@ class _ButtonAttributeParser(HTMLParser):
             self.buttons.append(dict(attrs))
 
 
+class _AnchorAttributeParser(HTMLParser):
+    """Collect attributes from every dashboard anchor element."""
+
+    def __init__(self):
+        """Initialize an empty anchor-attribute collection."""
+        super().__init__()
+        self.anchors = []
+
+    def handle_starttag(self, tag, attrs):
+        """Record one anchor's attributes while ignoring other elements."""
+        if tag == "a":
+            self.anchors.append(dict(attrs))
+
 def _serve(server):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -292,6 +305,26 @@ def test_dashboard_dialog_close_button_has_tooltip():
         attributes.get("title") == "Close (Esc)"
         and attributes.get("aria-label") == "Close"
         for attributes in parser.buttons
+    )
+
+
+def test_dashboard_dialog_external_links_have_screen_reader_warning():
+    """External links opening in a new tab must have an aria-label indicating context switch."""
+    html = dashboard_index_path().read_text(encoding="utf-8")
+    detail_markup = re.search(
+        r"const refs = \(f\.references\|\|\[\]\)\.map\(r=>`(?P<markup>.*?)`\)\.join\('<br>'\);",
+        html,
+        flags=re.DOTALL,
+    )
+    assert detail_markup is not None
+
+    parser = _AnchorAttributeParser()
+    parser.feed(detail_markup.group("markup"))
+
+    assert any(
+        attributes.get("target") == "_blank"
+        and attributes.get("aria-label") == "${esc(r)} (opens in a new tab)"
+        for attributes in parser.anchors
     )
 
 
