@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scanner.cli.appguardrail import SCAN_RULES, _scan_file
+from scanner.cli.appguardrail import (
+    SCAN_RULES,
+    _append_actions_poll_analyzer_findings,
+    _poll_analyzer_location,
+    _scan_file,
+)
 
 
 _HISTORICAL = "github-actions-transport-only-poll-bound"
@@ -278,3 +283,42 @@ def test_yaml_extension_workflow_emits_analyzer_only_helper_loop(
     )
 
     assert _poll_ids(findings).count(_HISTORICAL) == 1
+
+
+def test_workflow_without_poll_tokens_does_not_emit(tmp_path: Path) -> None:
+    """A conventional workflow with no polling loop stays negative."""
+    content = """name: Required review
+on: pull_request_target
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo hi
+"""
+
+    assert _poll_ids(_scan_workflow(tmp_path, content)) == []
+
+
+def test_poll_analyzer_location_uses_while_line_or_falls_back() -> None:
+    """Analyzer-only findings point at the first while line when one exists."""
+    assert _poll_analyzer_location("name: x\n") == (1, "")
+    line, snippet = _poll_analyzer_location("name: x\n          while :\n")
+    assert line == 2
+    assert snippet.startswith("while")
+
+
+def test_append_is_a_no_op_when_regex_already_reported_the_identity() -> None:
+    """Direct merge keeps a pre-existing regex finding as the sole identity."""
+    findings = [{"rule_id": _HISTORICAL}]
+    _append_actions_poll_analyzer_findings(
+        (
+            _FIXTURES / "github_actions_transport_only_poll_vulnerable.yml"
+        ).read_text(encoding="utf-8"),
+        findings,
+        ".github/workflows/required-review.yml",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("regex hit must not grow an analyzer duplicate")
+        ),
+    )
+
+    assert findings == [{"rule_id": _HISTORICAL}]
