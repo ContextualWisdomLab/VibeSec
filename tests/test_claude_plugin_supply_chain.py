@@ -578,6 +578,67 @@ def test_oversized_plugin_package_fails_closed(
     assert any(hit.rule_id == "claude-plugin-oversized-package" for hit in hits)
 
 
+def test_marketplace_and_plugin_ref_mismatch_fails_closed(tmp_path: Path) -> None:
+    """Catalog SHA and retrieved plugin SHA must be the same object."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    sha_a = "a727be1c7bd6064419b6f60d71993a19198adc17"
+    sha_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    _write_marketplace(
+        tmp_path,
+        {
+            "plugins": [
+                {"name": "listed", "source": {"repo": "example/safe-plugin", "ref": sha_a}}
+            ]
+        },
+    )
+    _write_marketplace(
+        tmp_path,
+        {
+            "name": "listed",
+            "source": {"repo": "example/safe-plugin", "ref": sha_b},
+        },
+        name="plugin.json",
+    )
+    (tmp_path / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    hits = scan_claude_plugin_package(tmp_path)
+    assert any(hit.rule_id == "claude-plugin-source-mismatch" for hit in hits)
+
+
+def test_declared_source_path_must_exist_inside_the_tree(tmp_path: Path) -> None:
+    """A source.path that is missing or escapes the tree fails admission."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    root = _pinned_plugin(tmp_path)
+    plugin = root / ".claude-plugin" / "plugin.json"
+    payload = json.loads(plugin.read_text(encoding="utf-8"))
+    payload["source"]["path"] = "plugins/missing"
+    plugin.write_text(json.dumps(payload), encoding="utf-8")
+    hits = scan_claude_plugin_package(root)
+    assert any(hit.rule_id == "claude-plugin-source-mismatch" for hit in hits)
+
+    payload["source"]["path"] = "../escape"
+    plugin.write_text(json.dumps(payload), encoding="utf-8")
+    hits = scan_claude_plugin_package(root)
+    assert any(hit.rule_id == "claude-plugin-source-mismatch" for hit in hits)
+
+
+def test_matching_source_path_is_not_a_mismatch(tmp_path: Path) -> None:
+    """An in-tree source.path that exists is not a mismatch finding."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    root = _pinned_plugin(tmp_path)
+    nested = root / "plugins" / "safe-plugin"
+    nested.mkdir(parents=True)
+    (nested / "README.md").write_text("ok\n", encoding="utf-8")
+    plugin = root / ".claude-plugin" / "plugin.json"
+    payload = json.loads(plugin.read_text(encoding="utf-8"))
+    payload["source"]["path"] = "plugins/safe-plugin"
+    plugin.write_text(json.dumps(payload), encoding="utf-8")
+    hits = scan_claude_plugin_package(root)
+    assert all(hit.rule_id != "claude-plugin-source-mismatch" for hit in hits)
+
+
 def test_missing_license_fails_package_admission(tmp_path: Path) -> None:
     """A plugin package without a LICENSE file is not a silent pass."""
     from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
