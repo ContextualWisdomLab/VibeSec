@@ -80,8 +80,9 @@ files being scanned, then applies the union of relevant checks. Examples:
   marketplace provenance, provider secrets, GitHub write tokens, Docker
   socket binds, secret-to-network flows, pipe-to-shell installers,
   unsigned executable downloads, unpinned package URL installs,
-  undeclared executables, and fail-closed replay of a stale or mismatched
-  scan receipt.
+  undeclared executables, reused #1036 skill-supply-chain identities on
+  plugin skill/agent surfaces, and fail-closed replay of a stale or
+  mismatched scan receipt.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution

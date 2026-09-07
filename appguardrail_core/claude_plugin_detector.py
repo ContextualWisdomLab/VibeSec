@@ -4,9 +4,11 @@ Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
 unsigned executable download, unpinned package URL install, undeclared hook,
 archive path escape, unadmitted nested submodule, hardcoded GitHub write
-token, Docker socket bind, or secret copied into a network request is a
+token, Docker socket bind, secret copied into a network request, or a
+released skill-supply-chain finding on a plugin skill/agent surface is a
 policy finding. Capability inventory is evidence, not permission: presence
-of a capability is not a finding by itself.
+of a capability is not a finding by itself. Skill homoglyph, injection,
+exfiltration, and placeholder hits reuse #1036 rule identities.
 """
 
 from __future__ import annotations
@@ -181,6 +183,15 @@ _EXECUTABLE_SUFFIXES = frozenset(
 )
 _SHELL_SUFFIXES: Final = frozenset({".sh", ".bash", ".zsh"})
 _HOOK_DIRS = ("hooks", "scripts", "commands")
+_SKILL_SUPPLY_CHAIN_RULE_IDS: Final = frozenset(
+    {
+        "skill-name-homoglyph-confusable",
+        "skill-manifest-prompt-injection-payload",
+        "skill-doc-exfiltration-endpoint-directive",
+        "skill-placeholder-template-unresolved",
+    }
+)
+_SKILL_SURFACE_NAMES: Final = frozenset({"SKILL.md", "skill.json", "agent.md"})
 _INVENTORY_MANIFESTS: Final = frozenset(
     {"plugin.json", "marketplace.json", ".mcp.json", "mcp.json", "hooks.json"}
 )
@@ -1300,6 +1311,51 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
             except (OSError, UnicodeDecodeError):
                 content = ""
             hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+    hits.extend(_skill_supply_chain_hits(root))
+    return tuple(hits)
+
+
+def _is_skill_surface(path: Path) -> bool:
+    """Return whether ``path`` is a released #1036 skill or agent surface."""
+    name = path.name
+    return name in _SKILL_SURFACE_NAMES or name.endswith(".skill.md")
+
+
+def _skill_supply_chain_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Reuse released #1036 rule identities on plugin skill/agent files.
+
+    Homoglyph, injection, exfiltration, and placeholder detection stay in
+    ``scanner/rules/skill_supply_chain.yml``. This adapter does not copy those
+    regular expressions. Missing rule files yield no hits.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Hits whose ``rule_id`` values are the released skill-supply-chain
+        identities. Empty when no skill surface exists or the YAML pack is
+        absent.
+    """
+    from scanner.cli.appguardrail import _scan_file
+
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file() or not _is_skill_surface(path):
+            continue
+        relative = path.relative_to(root).as_posix()
+        for finding in _scan_file(path, root):
+            rule_id = str(finding.get("rule_id") or "")
+            if rule_id not in _SKILL_SUPPLY_CHAIN_RULE_IDS:
+                continue
+            hits.append(
+                PluginHit(
+                    rule_id=rule_id,
+                    line=int(finding.get("line") or 1),
+                    snippet=str(finding.get("snippet") or path.name)[:120],
+                    message=str(finding.get("message") or ""),
+                    file=str(finding.get("file") or relative),
+                )
+            )
     return tuple(hits)
 
 
