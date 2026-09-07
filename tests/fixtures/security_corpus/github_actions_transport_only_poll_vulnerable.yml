@@ -1,0 +1,36 @@
+# Historical regression oracle extracted from
+# ContextualWisdomLab/.github@5c561a65cca3b925d533e4b40c5c3ac00f16524e
+# .github/workflows/opencode-review.yml. The source incident bounded only
+# consecutive API transport failures, not the successful-no-verdict path.
+name: Required review
+on:
+  pull_request_target:
+jobs:
+  review-verdict:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Wait for current-head verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          verdict=""
+          review_poll_failures=0
+          max_poll_transport_failures=3
+          poll_interval_seconds=60
+          while :; do
+            if ! reviews="$(timeout 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/1/reviews?per_page=100")"; then
+              review_poll_failures=$((review_poll_failures + 1))
+              if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
+                exit 1
+              fi
+              sleep "$poll_interval_seconds"
+              continue
+            fi
+            review_poll_failures=0
+            verdict="$(printf '%s\n' "$reviews" | jq -r '.[] | select(.state == "APPROVED") | .state' | tail -1)"
+            if [ -n "$verdict" ]; then
+              break
+            fi
+            sleep "$poll_interval_seconds"
+          done

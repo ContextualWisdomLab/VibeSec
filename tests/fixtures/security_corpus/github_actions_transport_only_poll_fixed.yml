@@ -1,0 +1,40 @@
+# Fixed regression oracle extracted from the protected causal repair
+# ContextualWisdomLab/.github@e29302c05eade7da7b0bdbb453e53980bc9d577b.
+# The wall-clock deadline is distinct from the transport-failure counter.
+name: Required review
+on:
+  pull_request_target:
+jobs:
+  review-verdict:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Wait for current-head verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          verdict=""
+          review_poll_failures=0
+          max_poll_transport_failures=3
+          poll_interval_seconds=60
+          poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))
+          while :; do
+            if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then
+              echo "::error::No current-head verdict after bounded polling."
+              exit 1
+            fi
+            if ! reviews="$(timeout 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/1/reviews?per_page=100")"; then
+              review_poll_failures=$((review_poll_failures + 1))
+              if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
+                exit 1
+              fi
+              sleep "$poll_interval_seconds"
+              continue
+            fi
+            review_poll_failures=0
+            verdict="$(printf '%s\n' "$reviews" | jq -r '.[] | select(.state == "APPROVED") | .state' | tail -1)"
+            if [ -n "$verdict" ]; then
+              break
+            fi
+            sleep "$poll_interval_seconds"
+          done
