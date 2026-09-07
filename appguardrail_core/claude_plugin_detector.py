@@ -40,6 +40,22 @@ CLAUDE_PLUGIN_SYMLINK_ESCAPE_MESSAGE: Final = (
     "and fail admission until the exact regular-file identity is declared. "
     "[CWE-59 - Improper Link Resolution Before File Access]"
 )
+CLAUDE_PLUGIN_DUPLICATE_JSON_MESSAGE: Final = (
+    "Claude plugin manifest contains duplicate JSON object members. Duplicate "
+    "keys conceal identity and must fail admission. "
+    "[CWE-20 - Improper Input Validation]"
+)
+CLAUDE_PLUGIN_UNBOUNDED_MCP_MESSAGE: Final = (
+    "Claude plugin starts a remote or stdio MCP server without a bounded "
+    "schema and source or authentication identity. Inventory is not permission. "
+    "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
+)
+CLAUDE_PLUGIN_LICENSE_MISSING_MESSAGE: Final = (
+    "Claude plugin package has no LICENSE or NOTICE file. Record license "
+    "evidence without inventing legal approval. "
+    "[CWE-1104 - Use of Unmaintained Third Party Components]"
+)
+_MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _SCANNER_NAME: Final = "appguardrail"
 _SCANNER_VERSION: Final = "0.1.1"
 
@@ -191,6 +207,16 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
             payload = {}
         declared = _declared_paths(payload)
     hits: list[PluginHit] = []
+    if _license_summary(root) == "absent":
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-license-missing",
+                line=1,
+                snippet=".claude-plugin",
+                message=CLAUDE_PLUGIN_LICENSE_MISSING_MESSAGE,
+                file=".claude-plugin",
+            )
+        )
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -323,8 +349,8 @@ def receipt_matches_artifact(receipt: PluginScanReceipt, root: Path) -> bool:
 
 
 def _is_manifest(filename: str, posix: str) -> bool:
-    """Return whether the file is a Claude plugin or marketplace manifest."""
-    if filename in {"marketplace.json", "plugin.json"}:
+    """Return whether the file is a Claude plugin, marketplace, or MCP manifest."""
+    if filename in {"marketplace.json", "plugin.json"} or filename in _MCP_FILENAMES:
         return True
     return posix.endswith("/.claude-plugin/marketplace.json") or posix.endswith(
         "/.claude-plugin/plugin.json"
@@ -346,10 +372,19 @@ def _is_hook_surface(filename: str, posix: str) -> bool:
 
 
 def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
-    """Return floating-ref and provider-secret hits from one manifest."""
+    """Return floating-ref, duplicate-JSON, MCP, and provider-secret hits."""
     hits: list[PluginHit] = []
     try:
-        payload = json.loads(content)
+        payload = _load_manifest_json(content)
+    except _DuplicateJsonMember as exc:
+        return (
+            PluginHit(
+                rule_id="claude-plugin-duplicate-json-member",
+                line=_line_of(content, str(exc)),
+                snippet=str(exc)[:120],
+                message=CLAUDE_PLUGIN_DUPLICATE_JSON_MESSAGE,
+            ),
+        )
     except json.JSONDecodeError:
         return ()
     for entry in _plugin_entries(payload):
@@ -363,6 +398,7 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
                     message=CLAUDE_PLUGIN_FLOATING_REF_MESSAGE,
                 )
             )
+    hits.extend(_mcp_hits(payload, content))
     secret = _PROVIDER_SECRET.search(content)
     if secret is not None:
         hits.append(
@@ -371,6 +407,64 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
                 line=content[: secret.start()].count("\n") + 1,
                 snippet=secret.group(0),
                 message=CLAUDE_PLUGIN_PROVIDER_SECRET_MESSAGE,
+            )
+        )
+    return tuple(hits)
+
+
+class _DuplicateJsonMember(ValueError):
+    """Raised when a JSON object repeats a member name."""
+
+
+def _load_manifest_json(content: str) -> object:
+    """Parse JSON while rejecting duplicate object members."""
+
+    def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        """Fail closed when a JSON object repeats a member name."""
+        seen: set[str] = set()
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in seen:
+                raise _DuplicateJsonMember(key)
+            seen.add(key)
+            result[key] = value
+        return result
+
+    return json.loads(content, object_pairs_hook=object_pairs)
+
+
+def _mcp_is_bounded(server: dict) -> bool:
+    """Return whether one MCP server declaration has schema plus identity."""
+    schema = server.get("schema") or server.get("inputSchema")
+    if not isinstance(schema, dict) or not schema:
+        return False
+    if isinstance(server.get("url"), str) and server["url"]:
+        auth = server.get("auth") or server.get("authentication")
+        return isinstance(auth, dict) and bool(auth)
+    if isinstance(server.get("command"), str) and server["command"]:
+        identity = server.get("source") or server.get("identity") or server.get("sha")
+        return bool(identity)
+    return False
+
+
+def _mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
+    """Return unbounded MCP server declarations from one manifest."""
+    if not isinstance(payload, dict):
+        return ()
+    servers = payload.get("mcpServers") or payload.get("mcp_servers")
+    if not isinstance(servers, dict) or not servers:
+        return ()
+    hits: list[PluginHit] = []
+    for name, server in servers.items():
+        if isinstance(server, dict) and _mcp_is_bounded(server):
+            continue
+        token = name if isinstance(name, str) else "mcp"
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-unbounded-mcp",
+                line=_line_of(content, token),
+                snippet=token[:120],
+                message=CLAUDE_PLUGIN_UNBOUNDED_MCP_MESSAGE,
             )
         )
     return tuple(hits)
@@ -555,6 +649,15 @@ def _plugin_identity(root: Path) -> dict[str, str]:
 def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
     """Combine package-level and per-file Claude plugin findings."""
     hits = list(scan_claude_plugin_package(root))
+    for mcp_name in _MCP_FILENAMES:
+        mcp_path = root / mcp_name
+        if mcp_path.is_symlink() or not mcp_path.is_file():
+            continue
+        try:
+            content = mcp_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            content = ""
+        hits.extend(inspect_claude_plugin_file(mcp_path.name, mcp_name, content))
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
         return tuple(hits)

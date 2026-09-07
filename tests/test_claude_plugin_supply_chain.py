@@ -183,6 +183,7 @@ def test_plugin_package_edges_cover_manifest_and_declaration_paths(
     (tmp_path / "hooks" / "other.sh").write_text("echo other\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "ok.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "LICENSE").write_text("MIT\n", encoding="utf-8")
     assert scan_claude_plugin_package(tmp_path) == ()
 
     marketplace = {
@@ -216,6 +217,7 @@ def _pinned_plugin(tmp_path: Path) -> Path:
         },
         name="plugin.json",
     )
+    (tmp_path / "LICENSE").write_text("MIT\n", encoding="utf-8")
     return tmp_path
 
 
@@ -427,3 +429,124 @@ def test_symlink_escape_is_reported_and_not_followed(tmp_path: Path) -> None:
     assert receipt.scan_result == "fail"
     assert "claude-plugin-symlink-escape" in receipt.finding_summary
     assert "sk-outside" not in json.dumps(receipt.as_dict())
+
+
+def test_duplicate_json_members_fail_closed(tmp_path: Path) -> None:
+    """Duplicate object members are hostile, not last-key-wins identity."""
+    target = tmp_path / ".claude-plugin" / "plugin.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        '{"name":"dup","name":"other","source":{"ref":'
+        '"a727be1c7bd6064419b6f60d71993a19198adc17"}}\n',
+        encoding="utf-8",
+    )
+    findings = _plugin_findings(target, tmp_path)
+    assert any(finding["rule_id"] == "claude-plugin-duplicate-json-member" for finding in findings)
+
+
+def test_unbounded_remote_mcp_is_reported(tmp_path: Path) -> None:
+    """Remote MCP without schema and authentication fails admission."""
+    from appguardrail_core.claude_plugin_detector import build_claude_plugin_scan_receipt
+
+    root = _pinned_plugin(tmp_path)
+    (root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote": {"url": "https://mcp.example.invalid/sse"}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-unbounded-mcp" in receipt.finding_summary
+
+
+def test_bounded_stdio_mcp_is_not_reported(tmp_path: Path) -> None:
+    """Stdio MCP with schema and source identity is inventory, not a finding."""
+    from appguardrail_core.claude_plugin_detector import build_claude_plugin_scan_receipt
+
+    root = _pinned_plugin(tmp_path)
+    (root / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "local": {
+                        "command": "python",
+                        "schema": {"type": "object"},
+                        "source": {
+                            "sha": "a727be1c7bd6064419b6f60d71993a19198adc17"
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert "claude-plugin-unbounded-mcp" not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+    (root / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote": {
+                        "url": "https://mcp.example.invalid/sse",
+                        "schema": {"type": "object"},
+                        "authentication": {"type": "token"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    remote = build_claude_plugin_scan_receipt(root)
+    assert "claude-plugin-unbounded-mcp" not in remote.finding_summary
+
+    (root / ".mcp.json").write_bytes(b"\xff\xfe{")
+    build_claude_plugin_scan_receipt(root)
+
+
+def test_mcp_declaration_edges_cover_unbounded_shapes(tmp_path: Path) -> None:
+    """Non-object servers, missing schema, and command-only MCP fail closed."""
+    from appguardrail_core.claude_plugin_detector import inspect_claude_plugin_file
+
+    listed = inspect_claude_plugin_file(
+        ".mcp.json",
+        ".mcp.json",
+        json.dumps(
+            {
+                "mcp_servers": {
+                    "broken": "stdio",
+                    "no-schema": {"command": "python", "sha": "abc"},
+                    "no-identity": {"command": "python", "schema": {"type": "object"}},
+                    "empty-url": {
+                        "url": "",
+                        "schema": {"type": "object"},
+                        "auth": {"type": "token"},
+                    },
+                }
+            }
+        ),
+    )
+    assert {hit.rule_id for hit in listed} == {"claude-plugin-unbounded-mcp"}
+    assert inspect_claude_plugin_file(".mcp.json", ".mcp.json", "[]") == ()
+
+
+def test_missing_license_fails_package_admission(tmp_path: Path) -> None:
+    """A plugin package without a LICENSE file is not a silent pass."""
+    from appguardrail_core.claude_plugin_detector import scan_claude_plugin_package
+
+    _write_marketplace(
+        tmp_path,
+        {
+            "name": "unlicensed",
+            "source": {"ref": "a727be1c7bd6064419b6f60d71993a19198adc17"},
+        },
+        name="plugin.json",
+    )
+    hits = scan_claude_plugin_package(tmp_path)
+    assert any(hit.rule_id == "claude-plugin-license-missing" for hit in hits)
