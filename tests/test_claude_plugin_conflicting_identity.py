@@ -138,6 +138,63 @@ def test_command_markdown_name_collision_fails(tmp_path: Path) -> None:
     assert receipt.scan_result == "fail"
 
 
+def test_marketplace_package_duplicate_names_fail(tmp_path: Path) -> None:
+    """A marketplace-only tree with two same-named plugins fails closed."""
+    _write_json(
+        tmp_path / ".claude-plugin" / "marketplace.json",
+        {
+            "plugins": [
+                {"name": "helper", "source": {"ref": _PINNED_COMMIT}},
+                {"name": "helper", "source": {"ref": _PINNED_COMMIT}},
+            ]
+        },
+    )
+    (tmp_path / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    hits = scan_claude_plugin_package(tmp_path)
+    assert any(hit.rule_id == _CONFLICT_RULE for hit in hits)
+
+
+def test_skill_json_name_collides_with_plugin_name(tmp_path: Path) -> None:
+    """``skill.json`` uses the same identity contract as SKILL.md."""
+    root = _licensed_plugin(tmp_path, name="helper")
+    _write_json(root / "skills" / "alpha" / "skill.json", {"name": "helper"})
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE in receipt.finding_summary
+
+
+def test_invalid_skill_json_is_not_an_identity(tmp_path: Path) -> None:
+    """Malformed or non-object skill.json files do not mint identities."""
+    root = _licensed_plugin(tmp_path)
+    broken = root / "skills" / "alpha" / "skill.json"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("[1, 2]\n", encoding="utf-8")
+    (root / "skills" / "beta" / "skill.json").parent.mkdir(parents=True)
+    (root / "skills" / "beta" / "skill.json").write_text("{not-json\n", encoding="utf-8")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+
+def test_non_utf8_skill_json_is_not_an_identity(tmp_path: Path) -> None:
+    """Unreadable skill.json bytes do not mint an identity name."""
+    root = _licensed_plugin(tmp_path)
+    path = root / "skills" / "alpha" / "skill.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff\xfe{")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+
+
+def test_block_scalar_skill_name_is_not_an_identity(tmp_path: Path) -> None:
+    """A YAML block-scalar name is empty, not a colliding identity."""
+    root = _licensed_plugin(tmp_path, name="helper")
+    skill = root / "skills" / "alpha" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: |\n  helper\n---\n", encoding="utf-8")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+
+
 def test_conflicting_identity_snippets_omit_secrets_and_bidi(
     tmp_path: Path,
 ) -> None:
