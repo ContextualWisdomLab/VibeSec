@@ -221,7 +221,7 @@ function render(){
     <h1>Dashboard</h1>
     <p class="sub">${findingsText} · <strong>${blocking}</strong> deploy-blocking (gate ${blocking?'active':'clear'})</p>
     <div class="cards">${cards}
-      <button type="button" class="card" aria-label="Filter by Deploy-blocking: ${blocking}" aria-pressed="${filterBlocking}" onclick="filterBlocking = !filterBlocking; render();" style="${filterBlocking ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;'}"><span class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</span><span class="n">${blocking}</span></button>
+      <button type="button" id="filter-blocking" class="card" aria-label="Filter by Deploy-blocking: ${blocking}" aria-pressed="${filterBlocking}" onclick="filterBlocking = !filterBlocking; render();" style="${filterBlocking ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;'}"><span class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</span><span class="n">${blocking}</span></button>
     </div>
     <div class="grid2">
       <div class="panel"><h2>Findings by category</h2><div class="rowlist">${catRows||'<div class="r">—</div>'}</div></div>
