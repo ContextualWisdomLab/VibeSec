@@ -1,6 +1,7 @@
 name: Python shell AST coverage
 
 on:
+  workflow_dispatch:
   push:
     branches: [develop, main]
     paths:
