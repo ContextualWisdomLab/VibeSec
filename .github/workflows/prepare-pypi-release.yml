@@ -22,11 +22,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}
-  queue: max
-  cancel-in-progress: false
-
 jobs:
   prepare-release:
     runs-on: ubuntu-latest
