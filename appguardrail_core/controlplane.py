@@ -647,7 +647,7 @@ def make_control_plane_server(host: str, port: int, db_path: str):
                     set_webhook(conn, org, webhook_url)
                 except ValueError:
                     return self._json(400, {"error": "invalid webhook url"})
-                return self._json(200, {"webhook_url": webhook_url or None})
+                return self._json(200, {"webhook_url": None if isinstance(webhook_url, str) and webhook_url == "" else webhook_url})
 
             if path == "/api/v1/keys":
                 if not has_role(role, "owner"):
