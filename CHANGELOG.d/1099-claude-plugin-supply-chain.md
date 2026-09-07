@@ -67,3 +67,9 @@
   `claude-plugin-inconsistent-normalized-name`. Precomposed Latin and
   Hangul names stay admitted. Combining-mark bytes do not appear in
   snippets.
+  Undeclared `vendor/`, `node_modules/`, `dist/`, or `*.min.js` copies
+  fail as `claude-plugin-vendored-scope-undeclared` so admission cannot
+  treat the tree as first-party. A `package.json` plus lockfile without
+  those copies stays inventory. Generated files listed in plugin.json
+  `files[]` are declared scope. Vendored trees emit one scope finding,
+  not per-file hook findings.

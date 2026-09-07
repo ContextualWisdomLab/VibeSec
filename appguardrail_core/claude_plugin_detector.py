@@ -8,7 +8,8 @@ executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, a non-standard JSON constant, malformed UTF-8 JSON bytes, a
-non-NFC identity name, a
+non-NFC identity name, undeclared vendored or generated third-party
+code, a
 description that denies inventoried write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
@@ -16,7 +17,7 @@ finding. Capability inventory is evidence,
 not permission: presence of a capability is not a finding by itself. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. A lockfile-backed package.json without a lifecycle download
-stays inventory.
+stays inventory. Vendored trees are one scope finding, not hook scans.
 """
 
 from __future__ import annotations
@@ -186,6 +187,14 @@ CLAUDE_PLUGIN_UNPINNED_PACKAGE_INSTALL_MESSAGE: Final = (
     "install mutable remote artifacts. "
     "[CWE-494 - Download of Code Without Integrity Check]"
 )
+CLAUDE_PLUGIN_VENDORED_SCOPE_MESSAGE: Final = (
+    "Claude plugin package contains vendored or generated third-party code "
+    "that is not declared as a bounded, identity-bound dependency. "
+    "Admission cannot treat vendor/, node_modules/, dist/, or min.js "
+    "copies as first-party hooks. Declare the exact path in files[] "
+    "or omit the checked-in copy. "
+    "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
+)
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
@@ -261,6 +270,7 @@ _EXECUTABLE_SUFFIXES = frozenset(
 )
 _SHELL_SUFFIXES: Final = frozenset({".sh", ".bash", ".zsh"})
 _HOOK_DIRS = ("hooks", "scripts", "commands")
+_VENDORED_SCOPE_DIR_NAMES: Final = frozenset({"vendor", "node_modules", "dist"})
 _HIDDEN_CONFIG_SUFFIXES: Final = frozenset(
     {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env"}
 )
@@ -646,12 +656,13 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
 
     Returns:
         Undeclared executable, hidden undeclared executable or config,
-        license absence or SPDX mismatch, size, symlink, archive traversal,
-        unadmitted-submodule, and deceptive description findings. Empty
-        when the tree is not a plugin package or every hook is a declared
-        regular file. Inventory presence is not a finding. An empty
-        description is not this class. Git metadata is not a plugin
-        executable surface. ``.mcp.json`` stays the MCP class.
+        undeclared vendored or generated scope, license absence or SPDX
+        mismatch, size, symlink, archive traversal, unadmitted-submodule,
+        and deceptive description findings. Empty when the tree is not a
+        plugin package or every hook is a declared regular file. Inventory
+        presence is not a finding. An empty description is not this class.
+        Git metadata is not a plugin executable surface. ``.mcp.json``
+        stays the MCP class. Vendored trees are one scope finding.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -696,12 +707,15 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     hits.extend(_source_mismatch_hits(root))
     hits.extend(_archive_traversal_hits(root))
     hits.extend(_unadmitted_submodule_hits(root))
+    hits.extend(_vendored_scope_hits(root, payload))
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
             continue
         for path in _walk_entries(directory):
             relative = path.relative_to(root).as_posix()
+            if _is_vendored_scope_relative(relative):
+                continue
             if path.is_symlink():
                 hits.append(
                     PluginHit(
@@ -1106,8 +1120,9 @@ def _package_lifecycle_file_hits(root: Path) -> tuple[PluginHit, ...]:
 
     Returns:
         Lifecycle-script findings from package.json files outside
-        ``.claude-plugin/`` and hook directories. Unreadable files yield no
-        hits.
+        ``.claude-plugin/`` and hook directories. Checked-in
+        ``node_modules`` copies are the vendored-scope class, not this
+        lifecycle surface. Unreadable files yield no hits.
     """
     hits: list[PluginHit] = []
     for path in _walk_entries(root):
@@ -1115,6 +1130,8 @@ def _package_lifecycle_file_hits(root: Path) -> tuple[PluginHit, ...]:
             continue
         relative = path.relative_to(root).as_posix()
         if _already_inspected_package_json(relative):
+            continue
+        if "node_modules" in relative.split("/"):
             continue
         try:
             content = path.read_text(encoding="utf-8")
@@ -1510,6 +1527,120 @@ def _collect_declared(value: object, declared: set[str]) -> None:
             _collect_declared(item, declared)
 
 
+def _is_vendored_scope_relative(relative: str) -> bool:
+    """Return whether ``relative`` is vendored, generated, or lockfile-adjacent.
+
+    ``vendor/``, ``node_modules/``, ``dist/``, and ``*.min.js`` copies are
+    third-party or generated scope. First-party hooks such as
+    ``hooks/pre.sh`` are not this class.
+    """
+    posix = relative.replace("\\", "/")
+    parts = [part for part in posix.split("/") if part]
+    if any(part in _VENDORED_SCOPE_DIR_NAMES for part in parts):
+        return True
+    return bool(parts) and parts[-1].endswith(".min.js")
+
+
+def _declared_vendored_scope_paths(payload: object) -> set[str]:
+    """Return bounded ``files[]`` paths declared on plugin identities.
+
+    Args:
+        payload: Parsed plugin or marketplace JSON.
+
+    Returns:
+        Normalized path labels. Non-list ``files`` values and non-string
+        entries are ignored so admission cannot treat inventory as
+        permission.
+    """
+    declared: set[str] = set()
+    for entry in _plugin_entries(payload):
+        files = entry.get("files") or []
+        if not isinstance(files, list):
+            continue
+        for item in files:
+            if not isinstance(item, str):
+                continue
+            normalized = item.replace("\\", "/").strip().strip("/")
+            if normalized:
+                declared.add(normalized)
+    return declared
+
+
+def _vendored_scope_is_declared(
+    relative: str, declared: set[str], admitted: tuple[str, ...]
+) -> bool:
+    """Return whether ``relative`` is bound by files[] or an admitted nested plugin."""
+    posix = relative.replace("\\", "/").strip("/")
+    return any(
+        posix == item or posix.startswith(item + "/")
+        for item in (*declared, *admitted)
+    )
+
+
+def _admitted_nested_scope_prefixes(root: Path) -> tuple[str, ...]:
+    """Return SHA-bound nested plugin paths that are already admitted.
+
+    Nested packages under ``vendor/`` with a recursively admitted immutable
+    SHA stay the submodule class. They are identity-bound dependencies, not
+    undeclared leftpad copies.
+    """
+    prefixes: list[str] = []
+    for pointer in _iter_submodules(root):
+        if not _submodule_is_admitted(root, pointer):
+            continue
+        path = pointer.path.replace("\\", "/").strip("/")
+        if path:
+            prefixes.append(path)
+    return tuple(prefixes)
+
+
+def _vendored_scope_label(relative: str) -> str:
+    """Return a bidi-free vendored-root or min.js path label."""
+    posix = relative.replace("\\", "/")
+    parts = [part for part in posix.split("/") if part]
+    for index, part in enumerate(parts):
+        if part in _VENDORED_SCOPE_DIR_NAMES:
+            return _sanitize_path_snippet("/".join(parts[: index + 1]) + "/")
+    return _sanitize_path_snippet(posix)
+
+
+def _vendored_scope_hits(root: Path, payload: object) -> tuple[PluginHit, ...]:
+    """Return one finding when undeclared vendored or generated code is present.
+
+    Args:
+        root: Materialized plugin tree.
+        payload: Parsed plugin or marketplace JSON.
+
+    Returns:
+        At most one hit. Snippets are path labels such as ``vendor/`` or
+        ``app.min.js``. File contents, secrets, and raw bidi never appear.
+        Empty when every vendored path is declared in ``files[]`` or the
+        tree has no vendor, node_modules, dist, or min.js copy. Git
+        metadata and admitted nested plugins are not this class.
+    """
+    declared = _declared_vendored_scope_paths(payload)
+    admitted = _admitted_nested_scope_prefixes(root)
+    for path in _walk_entries(root):
+        relative = path.relative_to(root).as_posix()
+        if _is_git_metadata_path(relative):
+            continue
+        if not _is_vendored_scope_relative(relative):
+            continue
+        if _vendored_scope_is_declared(relative, declared, admitted):
+            continue
+        label = _vendored_scope_label(relative)
+        return (
+            PluginHit(
+                rule_id="claude-plugin-vendored-scope-undeclared",
+                line=1,
+                snippet=label,
+                message=CLAUDE_PLUGIN_VENDORED_SCOPE_MESSAGE,
+                file=label,
+            ),
+        )
+    return ()
+
+
 def _is_git_metadata_path(relative: str) -> bool:
     """Return whether ``relative`` is Git metadata, not a plugin surface.
 
@@ -1568,7 +1699,8 @@ def _hidden_undeclared_executable_hits(
         declared. Empty when every hidden surface is Git metadata,
         documented MCP or plugin manifest, or already declared. Non-hidden
         extras under ``hooks/``, ``scripts/``, or ``commands/`` stay
-        ``claude-plugin-undeclared-executable``.
+        ``claude-plugin-undeclared-executable``. Vendored trees stay
+        ``claude-plugin-vendored-scope-undeclared``.
     """
     hits: list[PluginHit] = []
     for path in _walk_entries(root):
@@ -1576,6 +1708,8 @@ def _hidden_undeclared_executable_hits(
             continue
         relative = path.relative_to(root).as_posix()
         if relative in declared:
+            continue
+        if _is_vendored_scope_relative(relative):
             continue
         if not _is_hidden_executable_or_config_surface(path, relative):
             continue
@@ -2079,6 +2213,8 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
             if path.is_symlink() or not path.is_file():
                 continue
             relative = path.relative_to(root).as_posix()
+            if _is_vendored_scope_relative(relative):
+                continue
             hits.extend(
                 inspect_claude_plugin_bytes(
                     path.name,
@@ -2119,6 +2255,8 @@ def _skill_supply_chain_hits(root: Path) -> tuple[PluginHit, ...]:
         if path.is_symlink() or not path.is_file() or not _is_skill_surface(path):
             continue
         relative = path.relative_to(root).as_posix()
+        if _is_vendored_scope_relative(relative):
+            continue
         for finding in _scan_file(path, root):
             rule_id = str(finding.get("rule_id") or "")
             if rule_id not in _SKILL_SUPPLY_CHAIN_RULE_IDS:

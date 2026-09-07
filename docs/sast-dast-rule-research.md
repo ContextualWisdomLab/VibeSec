@@ -81,7 +81,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   socket binds, secret-to-network flows, pipe-to-shell installers,
   unsigned executable downloads including package.json lifecycle scripts,
   unpinned package URL installs,
-  undeclared executables, reused #1036 skill-supply-chain identities on
+  undeclared executables, undeclared vendored or generated code scope,
+  reused #1036 skill-supply-chain identities on
   plugin skill/agent surfaces, and fail-closed replay of a stale or
   mismatched scan receipt.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,

