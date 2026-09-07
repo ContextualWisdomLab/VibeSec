@@ -62,7 +62,7 @@ def _licensed_plugin(root: Path, *, name: str = "safe-plugin") -> Path:
 
 
 def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
-    """Two SKILL.md files that share a name conceal identity."""
+    """Two SKILL.md files that share a name conceal one invocation identity."""
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
     _write_skill(root / "skills" / "beta" / "SKILL.md", "helper")
@@ -73,13 +73,13 @@ def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
     assert _CONFLICT_RULE in receipt.finding_summary
 
 
-def test_plugin_name_colliding_with_skill_name_fails(tmp_path: Path) -> None:
-    """A plugin identity must not reuse a skill name."""
+def test_plugin_namespace_may_match_local_skill_name(tmp_path: Path) -> None:
+    """Plugin identity is a namespace prefix, not the local skill identity."""
     root = _licensed_plugin(tmp_path, name="helper")
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
     receipt = build_claude_plugin_scan_receipt(root)
-    assert receipt.scan_result == "fail"
-    assert _CONFLICT_RULE in receipt.finding_summary
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
 
 
 def test_marketplace_duplicate_plugin_names_are_reported() -> None:
@@ -129,7 +129,7 @@ def test_vendored_scope_owner_is_unchanged(tmp_path: Path) -> None:
 
 
 def test_command_markdown_name_collision_fails(tmp_path: Path) -> None:
-    """Two command files that share a frontmatter name fail closed."""
+    """Two legacy command files sharing one local skill name fail closed."""
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "commands" / "one.md", "ship")
     _write_skill(root / "commands" / "two.md", "ship")
@@ -154,12 +154,22 @@ def test_marketplace_package_duplicate_names_fail(tmp_path: Path) -> None:
     assert any(hit.rule_id == _CONFLICT_RULE for hit in hits)
 
 
-def test_skill_json_name_collides_with_plugin_name(tmp_path: Path) -> None:
-    """``skill.json`` uses the same identity contract as SKILL.md."""
+def test_skill_json_name_may_match_plugin_namespace(tmp_path: Path) -> None:
+    """Legacy skill metadata stays inside the plugin namespace."""
     root = _licensed_plugin(tmp_path, name="helper")
     _write_json(root / "skills" / "alpha" / "skill.json", {"name": "helper"})
     receipt = build_claude_plugin_scan_receipt(root)
-    assert _CONFLICT_RULE in receipt.finding_summary
+    assert _CONFLICT_RULE not in receipt.finding_summary
+
+
+def test_agent_name_is_separate_from_skill_invocation_name(tmp_path: Path) -> None:
+    """Agent and skill components use separate invocation surfaces."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
+    _write_skill(root / "agents" / "helper.md", "helper")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
 
 
 def test_invalid_skill_json_is_not_an_identity(tmp_path: Path) -> None:
