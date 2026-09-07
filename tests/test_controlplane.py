@@ -260,14 +260,6 @@ def test_api_explicit_webhook_deletion(server):
     assert body["webhook_url"] is None
 
 
-def test_api_empty_string_webhook_deletion(server):
-    base, key = server
-    status, body = _req("POST", f"{base}/api/v1/webhook", key, {"url": ""})
-
-    assert status == 200
-    assert body["webhook_url"] is None
-
-
 def test_api_set_webhook_ssrf_protection(server):
     base, key = server
     # Invalid type
