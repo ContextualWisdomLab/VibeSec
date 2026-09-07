@@ -16,7 +16,7 @@
 
 ## 2024-10-24 - Interactive Table Rows Keyboard Accessibility
 **Learning:** Interactive table rows (e.g. `tr.scan` with `onclick` handlers) are not inherently accessible to keyboard users. Screen readers may ignore them, and they cannot be focused or activated via keyboard.
-**Action:** Always add `tabindex="0"`, `role="button"`, an appropriate `aria-label`, and a `keydown` event listener to handle `Enter` and `Space` key presses.
+**Action:** When making table rows interactive, always add `tabindex="0"`, `role="button"`, an appropriate `aria-label`, and a `keydown` event listener to handle `Enter` and `Space` key presses.
 
 ## 2026-07-18 - 표준화된 에러 메시지와 동적 복수형 처리
 **Learning:** CLI 도구에서 에러 메시지의 일관성(`❌ Error:`)과 실천 가능한 조언(`💡 Hint:`)의 명확한 구분은 사용자의 문제 해결 경험을 크게 향상시킨다. 또한 하드코딩된 복수형 접미사(예: `components`)는 터미널 출력의 품질을 떨어뜨린다.
