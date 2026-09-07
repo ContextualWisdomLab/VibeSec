@@ -26,5 +26,8 @@
   `skill-manifest-prompt-injection-payload`,
   `skill-doc-exfiltration-endpoint-directive`,
   `skill-placeholder-template-unresolved`) on the admission receipt without
-  copying those regular expressions. `.claude-plugin/` is included in the
+  copying those regular expressions. `appguardrail scan-plugin
+  --plugin-root <path> [--marketplace-entry <path>] [--receipt-json <path>]`
+  scans a materialized plugin tree, emits that same receipt JSON, and exits
+  nonzero unless `scan_result` is pass. `.claude-plugin/` is included in the
   scan walk.

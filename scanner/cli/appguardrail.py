@@ -5,6 +5,7 @@ appguardrail - Security guardrails for AI-built apps
 Usage:
   appguardrail init [--tool <tool>] [--stack <stack>]
   appguardrail scan [--trivy] [--external auto|off] [--bandit] [--ruff] [--semgrep] [--zap-baseline <url>] [--findings-json <path>] [--codegraph] [<path>]
+  appguardrail scan-plugin --plugin-root <path> [--marketplace-entry <path>] [--receipt-json <path>]
   appguardrail monitor
   appguardrail review [--stack <stack>] [--db <db>] [--payments <payments>]
   appguardrail report {buyer-diligence,founder-friendly,agency,fix-pack} --findings <json> [--out <path>]
@@ -16,6 +17,7 @@ Usage:
 Commands:
   init      Install security rules into your project
   scan      Run a lightweight security scan on a directory
+  scan-plugin  Scan a materialized Claude plugin artifact and emit a receipt
   monitor   Install a GitHub Actions monitor workflow
   review    Generate an AI review prompt for your stack
   report    Generate product and diligence reports from findings JSON
@@ -3699,6 +3701,26 @@ def main():
         help="Initialize or sync CodeGraph before scanning for structural review context",
     )
 
+    scan_plugin_parser = subparsers.add_parser(
+        "scan-plugin",
+        help="Scan a materialized Claude plugin artifact and emit a receipt",
+    )
+    scan_plugin_parser.add_argument(
+        "--plugin-root",
+        required=True,
+        help="Local materialized plugin directory",
+    )
+    scan_plugin_parser.add_argument(
+        "--marketplace-entry",
+        default=None,
+        help="Optional marketplace catalog entry JSON path",
+    )
+    scan_plugin_parser.add_argument(
+        "--receipt-json",
+        default=None,
+        help="Write the deterministic receipt JSON to this bounded file",
+    )
+
     # monitor
     subparsers.add_parser(
         "monitor",
@@ -3894,6 +3916,10 @@ def main():
         cmd_init(args)
     elif args.command == "scan":
         sys.exit(cmd_scan(args))
+    elif args.command == "scan-plugin":
+        from appguardrail_core.claude_plugin_scan_cli import cmd_scan_plugin
+
+        sys.exit(cmd_scan_plugin(args))
     elif args.command == "monitor":
         sys.exit(cmd_monitor(args))
     elif args.command == "review":

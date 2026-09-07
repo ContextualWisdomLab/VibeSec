@@ -226,3 +226,142 @@ def test_scan_plugin_receipt_json_omits_secret_values(
     assert "OPENAI_API_KEY" not in stderr
     for key in _REQUIRED_RECEIPT_KEYS:
         assert key in payload
+
+
+def _create_symlink(target: Path, link: Path, target_is_directory: bool = False) -> None:
+    """Create a symlink or skip when the host cannot."""
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (NotImplementedError, OSError) as exc:  # pragma: no cover
+        pytest.skip(f"symlinks are not available in this environment: {exc}")
+
+
+def test_scan_plugin_missing_marketplace_entry_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A missing marketplace entry path fails closed without a pass receipt."""
+    root = _pass_plugin(tmp_path / "plugin")
+
+    code, stdout, stderr = _run_cli(
+        monkeypatch,
+        capsys,
+        [
+            "scan-plugin",
+            "--plugin-root",
+            str(root),
+            "--marketplace-entry",
+            str(tmp_path / "absent-market.json"),
+        ],
+    )
+
+    assert code != 0
+    assert "marketplace entry" in stderr.lower()
+    assert "scan_result" not in stdout
+
+
+def test_scan_plugin_rejects_symlink_root_and_non_json_marketplace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Symlink roots and hostile marketplace documents fail closed."""
+    from types import SimpleNamespace
+
+    from appguardrail_core.claude_plugin_scan_cli import (
+        MAX_MARKETPLACE_BYTES,
+        cmd_scan_plugin,
+        scan_plugin_artifact,
+    )
+
+    root = _pass_plugin(tmp_path / "plugin")
+    link = tmp_path / "plugin-link"
+    _create_symlink(root, link, target_is_directory=True)
+    assert scan_plugin_artifact(link) == 1
+
+    file_root = tmp_path / "not-a-dir"
+    file_root.write_text("x\n", encoding="utf-8")
+    assert (
+        cmd_scan_plugin(
+            SimpleNamespace(
+                plugin_root=str(file_root),
+                marketplace_entry=None,
+                receipt_json=None,
+            )
+        )
+        == 1
+    )
+    assert cmd_scan_plugin(SimpleNamespace()) == 1
+
+    market_link = tmp_path / "market-link.json"
+    _create_symlink(root / ".claude-plugin" / "marketplace.json", market_link)
+    assert scan_plugin_artifact(root, marketplace_entry=market_link) == 1
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{", encoding="utf-8")
+    assert scan_plugin_artifact(root, marketplace_entry=invalid) == 1
+
+    scalar = tmp_path / "scalar.json"
+    scalar.write_text("1\n", encoding="utf-8")
+    assert scan_plugin_artifact(root, marketplace_entry=scalar) == 1
+
+    binary = tmp_path / "binary.json"
+    binary.write_bytes(b"\xff\xfe")
+    assert scan_plugin_artifact(root, marketplace_entry=binary) == 1
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b"[" + (b" " * (MAX_MARKETPLACE_BYTES + 1)) + b"]")
+    assert scan_plugin_artifact(root, marketplace_entry=oversized) == 1
+
+    original_read = Path.read_bytes
+
+    def boom_read(self: Path) -> bytes:
+        """Raise on the marketplace file only."""
+        if self == binary:
+            raise OSError("denied")
+        return original_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", boom_read)
+    assert scan_plugin_artifact(root, marketplace_entry=binary) == 1
+    captured = capsys.readouterr()
+    assert _SECRET not in captured.out
+    assert _SECRET not in captured.err
+
+
+def test_scan_plugin_receipt_write_and_verify_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Receipt file destinations and stale verification fail closed."""
+    from appguardrail_core import claude_plugin_scan_cli as cli
+    from appguardrail_core.claude_plugin_detector import PluginReceiptVerification
+
+    root = _pass_plugin(tmp_path / "plugin")
+    as_dir = tmp_path / "receipt-dir"
+    as_dir.mkdir()
+    assert cli.scan_plugin_artifact(root, receipt_json=as_dir) == 1
+
+    target = tmp_path / "target.json"
+    target.write_text("{}\n", encoding="utf-8")
+    linked = tmp_path / "linked-receipt.json"
+    _create_symlink(target, linked)
+    assert cli.scan_plugin_artifact(root, receipt_json=linked) == 1
+
+    blocked_parent = tmp_path / "blocked"
+    blocked_parent.write_text("x\n", encoding="utf-8")
+    assert cli.scan_plugin_artifact(root, receipt_json=blocked_parent / "receipt.json") == 1
+
+    monkeypatch.setattr(
+        cli,
+        "verify_plugin_scan_receipt",
+        lambda *_args, **_kwargs: PluginReceiptVerification(
+            matches=False,
+            mismatches=("artifact_sha256",),
+        ),
+    )
+    assert cli.scan_plugin_artifact(root) == 1
+    captured = capsys.readouterr()
+    assert "does not match" in captured.err
+    assert "scan_result" not in captured.out

@@ -343,6 +343,19 @@ def test_main_scan(monkeypatch):
         mock_scan.assert_called_once()
 
 
+def test_main_scan_plugin(monkeypatch):
+    test_args = ["appguardrail", "scan-plugin", "--plugin-root", "."]
+    monkeypatch.setattr(sys, "argv", test_args)
+    with patch(
+        "appguardrail_core.claude_plugin_scan_cli.cmd_scan_plugin",
+        return_value=0,
+    ) as mock_scan:
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        mock_scan.assert_called_once()
+
+
 def test_main_review(monkeypatch):
     test_args = ["appguardrail", "review", "--stack", "nextjs"]
     monkeypatch.setattr(sys, "argv", test_args)
