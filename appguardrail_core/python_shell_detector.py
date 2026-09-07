@@ -8,16 +8,18 @@ from typing import Final
 
 
 PYTHON_COMMAND_INJECTION_MESSAGE: Final = (
-    "Potential command injection sink detected: os.system/os.popen execute "
-    "through a shell, and subprocess shell=True invokes a shell. Avoid shell "
-    "execution, validate untrusted input, and use argument arrays where "
-    "possible. [OWASP A03:2021 - Injection]"
+    "Potential command injection sink detected: os.system/os.popen and "
+    "subprocess.getoutput/getstatusoutput execute through a shell, and "
+    "subprocess shell=True invokes a shell. Avoid shell execution, validate "
+    "untrusted input, and use argument arrays where possible. "
+    "[OWASP A03:2021 - Injection]"
 )
 
 _OS_SHELL_APIS: Final = frozenset({"popen", "system"})
 _SUBPROCESS_SHELL_APIS: Final = frozenset(
     {"Popen", "call", "check_call", "check_output", "run"}
 )
+_SUBPROCESS_IMPLICIT_SHELL_APIS: Final = frozenset({"getoutput", "getstatusoutput"})
 _OTHER_BINDING: Final = ("other", None)
 _OS_MODULE_BINDING: Final = ("os-module", None)
 _SUBPROCESS_MODULE_BINDING: Final = ("subprocess-module", None)
@@ -305,13 +307,18 @@ class _ShellCallVisitor(ast.NodeVisitor):
         """Resolve a call target to its supported family and canonical API."""
         if isinstance(function, ast.Name):
             kind, api = self.scope.lookup(function.id)
-            if kind in {"os-function", "subprocess-function"} and api is not None:
+            if (
+                kind in {"os-function", "subprocess-function", "subprocess-implicit-shell"}
+                and api is not None
+            ):
                 return kind, api
             return None
         if isinstance(function, ast.Attribute) and isinstance(function.value, ast.Name):
             kind, _api = self.scope.lookup(function.value.id)
             if kind == "os-module" and function.attr in _OS_SHELL_APIS:
                 return "os-function", f"os.{function.attr}"
+            if kind == "subprocess-module" and function.attr in _SUBPROCESS_IMPLICIT_SHELL_APIS:
+                return "subprocess-implicit-shell", f"subprocess.{function.attr}"
             if kind == "subprocess-module" and function.attr in _SUBPROCESS_SHELL_APIS:
                 return "subprocess-function", f"subprocess.{function.attr}"
         return None
@@ -356,6 +363,12 @@ class _ShellCallVisitor(ast.NodeVisitor):
             binding = _OTHER_BINDING
             if node.level == 0 and node.module == "os" and alias.name in _OS_SHELL_APIS:
                 binding = ("os-function", f"os.{alias.name}")
+            elif (
+                node.level == 0
+                and node.module == "subprocess"
+                and alias.name in _SUBPROCESS_IMPLICIT_SHELL_APIS
+            ):
+                binding = ("subprocess-implicit-shell", f"subprocess.{alias.name}")
             elif (
                 node.level == 0
                 and node.module == "subprocess"
@@ -526,7 +539,7 @@ class _ShellCallVisitor(ast.NodeVisitor):
         resolved = self._binding_for_call(node.func)
         if resolved is not None:
             kind, api = resolved
-            if kind == "os-function" or any(
+            if kind in {"os-function", "subprocess-implicit-shell"} or any(
                 keyword.arg == "shell"
                 and isinstance(keyword.value, ast.Constant)
                 and keyword.value.value is True

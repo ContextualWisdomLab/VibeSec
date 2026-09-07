@@ -9,8 +9,10 @@ for the supported high-confidence source shapes instead of a multiline regular
 expression. The detector resolves direct and aliased imports of `os` and
 `subprocess`, tracks lexical shadowing, and records:
 
-1. `os.system(...)` and `os.popen(...)`, which execute through a shell; and
-2. `subprocess.Popen`, `run`, `call`, `check_call`, or `check_output` only when
+1. `os.system(...)` and `os.popen(...)`, which execute through a shell;
+2. `subprocess.getoutput(...)` and `subprocess.getstatusoutput(...)`, which
+   always execute through `/bin/sh`; and
+3. `subprocess.Popen`, `run`, `call`, `check_call`, or `check_output` only when
    the parsed call contains literal `shell=True`.
 
 The AST boundary removes regex parenthesis-depth limits and ignores matching
