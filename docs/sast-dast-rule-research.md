@@ -79,7 +79,8 @@ files being scanned, then applies the union of relevant checks. Examples:
 - `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-200 plugin
   marketplace provenance, provider secrets, GitHub write tokens, Docker
   socket binds, secret-to-network flows, pipe-to-shell installers,
-  unsigned executable downloads, unpinned package URL installs,
+  unsigned executable downloads including package.json lifecycle scripts,
+  unpinned package URL installs,
   undeclared executables, reused #1036 skill-supply-chain identities on
   plugin skill/agent surfaces, and fail-closed replay of a stale or
   mismatched scan receipt.

@@ -2,13 +2,15 @@
 
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
-unsigned executable download, unpinned package URL install, undeclared hook,
-archive path escape, unadmitted nested submodule, hardcoded GitHub write
-token, Docker socket bind, secret copied into a network request, or a
-released skill-supply-chain finding on a plugin skill/agent surface is a
-policy finding. Capability inventory is evidence, not permission: presence
-of a capability is not a finding by itself. Skill homoglyph, injection,
-exfiltration, and placeholder hits reuse #1036 rule identities.
+unsigned executable download, package.json lifecycle download, unpinned
+package URL install, undeclared hook, archive path escape, unadmitted nested
+submodule, hardcoded GitHub write token, Docker socket bind, secret copied
+into a network request, or a released skill-supply-chain finding on a plugin
+skill/agent surface is a policy finding. Capability inventory is evidence,
+not permission: presence of a capability is not a finding by itself. Skill
+homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
+identities. A lockfile-backed package.json without a lifecycle download
+stays inventory.
 """
 
 from __future__ import annotations
@@ -37,8 +39,9 @@ CLAUDE_PLUGIN_PROVIDER_SECRET_MESSAGE: Final = (
     "[CWE-798 - Use of Hard-coded Credentials]"
 )
 CLAUDE_PLUGIN_PIPE_TO_SHELL_MESSAGE: Final = (
-    "Claude plugin hook downloads a mutable script and pipes it to a shell. "
-    "Pin and verify installers; do not execute unsigned remote content. "
+    "Claude plugin hook or package lifecycle script downloads a mutable "
+    "script and pipes it to a shell. Pin and verify installers; do not "
+    "execute unsigned remote content. "
     "[CWE-494 - Download of Code Without Integrity Check]"
 )
 CLAUDE_PLUGIN_UNDECLARED_EXECUTABLE_MESSAGE: Final = (
@@ -119,14 +122,16 @@ CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
 CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE: Final = (
-    "Claude plugin hook downloads an unsigned executable and makes it "
-    "runnable. Pin and verify binaries; do not fetch mutable runtime "
-    "payloads. [CWE-494 - Download of Code Without Integrity Check]"
+    "Claude plugin hook or package lifecycle script downloads an unsigned "
+    "executable and makes it runnable. Pin and verify binaries; do not "
+    "fetch mutable runtime payloads. "
+    "[CWE-494 - Download of Code Without Integrity Check]"
 )
 CLAUDE_PLUGIN_UNPINNED_PACKAGE_INSTALL_MESSAGE: Final = (
-    "Claude plugin hook installs a package from an unpinned URL. Pin "
-    "versions and integrity hashes; do not install mutable remote "
-    "artifacts. [CWE-494 - Download of Code Without Integrity Check]"
+    "Claude plugin hook or package lifecycle script installs a package "
+    "from an unpinned URL. Pin versions and integrity hashes; do not "
+    "install mutable remote artifacts. "
+    "[CWE-494 - Download of Code Without Integrity Check]"
 )
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
@@ -190,6 +195,7 @@ _PACKAGE_LOCK_NAMES: Final = frozenset(
         "yarn.lock",
     }
 )
+_LIFECYCLE_SCRIPT_NAMES: Final = ("preinstall", "install", "postinstall")
 _EXECUTABLE_SUFFIXES = frozenset(
     {".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".py"}
 )
@@ -426,12 +432,14 @@ def inspect_claude_plugin_file(
 
     Returns:
         Zero or more hits. Unrelated files return an empty tuple.
+        ``package.json`` is inspected only for npm install lifecycle scripts.
     """
     posix = relative_path.replace("\\", "/")
     hits: list[PluginHit] = []
     manifest = _is_manifest(filename, posix)
     hook_surface = _is_hook_surface(filename, posix)
-    if not manifest and not hook_surface:
+    lifecycle_surface = _is_package_lifecycle_surface(filename)
+    if not manifest and not hook_surface and not lifecycle_surface:
         return ()
     if manifest:
         hits.extend(_inspect_manifest(content))
@@ -453,9 +461,12 @@ def inspect_claude_plugin_file(
     if hook_surface:
         hits.extend(_unsigned_executable_download_hits(content))
         hits.extend(_unpinned_package_install_hits(content))
-    hits.extend(_github_write_token_hits(content))
-    hits.extend(_docker_socket_hits(content))
-    hits.extend(_secret_to_network_hits(content))
+    if lifecycle_surface:
+        hits.extend(_package_lifecycle_hits(content))
+    if manifest or hook_surface:
+        hits.extend(_github_write_token_hits(content))
+        hits.extend(_docker_socket_hits(content))
+        hits.extend(_secret_to_network_hits(content))
     return tuple(hits)
 
 
@@ -825,6 +836,119 @@ def _is_hook_surface(filename: str, posix: str) -> bool:
         return False
     suffix = Path(filename).suffix.lower()
     return suffix in _EXECUTABLE_SUFFIXES or suffix == ""
+
+
+def _is_package_lifecycle_surface(filename: str) -> bool:
+    """Return whether the file is an npm ``package.json`` lifecycle surface."""
+    return filename == "package.json"
+
+
+def _lifecycle_script_values(content: str) -> tuple[tuple[str, str], ...]:
+    """Return ``(name, script)`` pairs for npm install lifecycle scripts."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+    scripts = payload.get("scripts")
+    if not isinstance(scripts, dict):
+        return ()
+    found: list[tuple[str, str]] = []
+    for name in _LIFECYCLE_SCRIPT_NAMES:
+        value = scripts.get(name)
+        if isinstance(value, str) and value.strip():
+            found.append((name, value))
+    return tuple(found)
+
+
+def _script_line(content: str, body: str) -> int:
+    """Return the 1-based line of a lifecycle script body in package.json."""
+    if body in content:
+        return _line_of(content, body)
+    return _line_of(content, json.dumps(body)[1:-1])
+
+
+def _package_lifecycle_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return unsigned-download findings from package.json lifecycle scripts.
+
+    Only ``preinstall``, ``install``, and ``postinstall`` script strings are
+    scanned. Other script names and non-script fields stay inventory.
+
+    Args:
+        content: Raw ``package.json`` text.
+
+    Returns:
+        Hits using the existing unsigned-download, pipe-to-shell, and
+        unpinned-package rule identities. Empty when no lifecycle script
+        downloads or executes an unsigned payload.
+    """
+    hits: list[PluginHit] = []
+    for _name, body in _lifecycle_script_values(content):
+        line = _script_line(content, body)
+        match = _PIPE_TO_SHELL.search(body)
+        if match is not None:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-pipe-to-shell",
+                    line=line,
+                    snippet=_sanitize_plugin_snippet(match.group(0).splitlines()[0]),
+                    message=CLAUDE_PLUGIN_PIPE_TO_SHELL_MESSAGE,
+                )
+            )
+        for hit in _unsigned_executable_download_hits(body):
+            hits.append(
+                PluginHit(
+                    rule_id=hit.rule_id,
+                    line=line,
+                    snippet=hit.snippet,
+                    message=hit.message,
+                )
+            )
+        for hit in _unpinned_package_install_hits(body):
+            hits.append(
+                PluginHit(
+                    rule_id=hit.rule_id,
+                    line=line,
+                    snippet=hit.snippet,
+                    message=hit.message,
+                )
+            )
+    return tuple(hits)
+
+
+def _already_inspected_package_json(relative: str) -> bool:
+    """Return whether ``relative`` is already scanned under plugin or hook dirs."""
+    posix = relative.replace("\\", "/")
+    if posix.startswith(".claude-plugin/"):
+        return True
+    return posix.split("/", 1)[0] in _HOOK_DIRS
+
+
+def _package_lifecycle_file_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Inspect ``package.json`` files that hook and plugin-dir walks miss.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Lifecycle-script findings from package.json files outside
+        ``.claude-plugin/`` and hook directories. Unreadable files yield no
+        hits.
+    """
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file() or path.name != "package.json":
+            continue
+        relative = path.relative_to(root).as_posix()
+        if _already_inspected_package_json(relative):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            content = ""
+        hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+    return tuple(hits)
 
 
 def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
@@ -1407,7 +1531,7 @@ def _plugin_identity(root: Path) -> dict[str, str]:
 
 
 def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
-    """Combine package-level and per-file Claude plugin findings."""
+    """Combine package-level, hook, and package.json lifecycle findings."""
     hits = list(scan_claude_plugin_package(root))
     for mcp_name in _MCP_FILENAMES:
         mcp_path = root / mcp_name
@@ -1443,6 +1567,7 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
             except (OSError, UnicodeDecodeError):
                 content = ""
             hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+    hits.extend(_package_lifecycle_file_hits(root))
     hits.extend(_skill_supply_chain_hits(root))
     return tuple(hits)
 
