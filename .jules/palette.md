@@ -81,3 +81,7 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+
+## 2026-09-07 - Native File Input Styling Proxy
+**Learning:** The native `<input type="file">` element is difficult to style consistently across browsers, and it relies on an `aria-label` that doesn't follow 'label-in-name' principles visually.
+**Action:** Hide the native input using the `hidden` attribute and proxy its functionality via a styled native `<button>` with an explicit `addEventListener`. This provides a predictable visual UX while preserving keyboard accessibility and matching existing UI components.
