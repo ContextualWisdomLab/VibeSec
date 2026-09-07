@@ -1,0 +1,3 @@
+# Security
+
+- Add a bounded structural GitHub Actions + shell analyzer that classifies transport-only polling loops by causal control flow (loop-local initialization, forward `-gt`/`-ge` total bounds, reachable fail-closed exits, and statically positive owning-job timeouts) while preserving the packaged `github-actions-transport-only-poll-bound` and `github-actions-transport-failure-budget-poll-bound` identities as migration oracles. Helper loops, sibling-job timeouts, reversed comparisons, unreachable exits, and quoted or comment text cannot donate safety. See issue #1087 and ADR-0009 (Proposed).

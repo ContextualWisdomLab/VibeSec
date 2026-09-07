@@ -10,6 +10,7 @@
 | [0004](0004-tenant-network-boundaries.md) | Tenant authority and outbound destinations are explicit security boundaries | Accepted |
 | [0005](0005-remediation-authority.md) | Deterministic autofix is limited to proven semantics-preserving transforms | Accepted |
 | [0006](0006-automation-authority.md) | Autonomous development remains separate from independent merge/release authority | Accepted |
+| [0009](0009-actions-poll-structural-analyzer.md) | Structural GitHub Actions poll-bound analyzer is additive to the #1088 regex corpus | Proposed |
 
 ## ADR triggers
 
