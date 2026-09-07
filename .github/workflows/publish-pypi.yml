@@ -9,11 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}
-  queue: max
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
