@@ -32,8 +32,8 @@
   h1{font-size:24px;margin:0 0 4px}
   .sub{color:var(--muted);margin:0 0 20px}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-bottom:20px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}
-  .card .n{font-size:30px;font-weight:700}
+  .card{appearance:none;font:inherit;color:inherit;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}
+  .card .n{display:block;font-size:30px;font-weight:700}
   .card .lbl{display:flex;align-items:center;gap:8px;color:var(--muted);font-weight:600;font-size:13px}
   .dot{width:10px;height:10px;border-radius:50%}
   .grid2{display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start}
@@ -132,6 +132,7 @@ function safeUrl(u){
 
 let ALL = null;
 let filterSev = '', query = '';
+let filterBlocking = false;
 let lastFocus = null;
 
 function render(){
@@ -194,6 +195,7 @@ function render(){
   const filtered = ALL
     .map((f,i)=>({f,i}))
     .filter(({f})=> (!filterSev || String(f.severity).toUpperCase()===filterSev))
+    .filter(({f})=> (!filterBlocking || isDeployBlocking(f)))
     .filter(({f})=> !query || (String(f.message)+' '+String(f.file)+' '+String(f.rule_id)+' '+String(f.category)).toLowerCase().includes(query))
     .sort((a,b)=> SEV_ORDER.indexOf(String(a.f.severity).toUpperCase()) - SEV_ORDER.indexOf(String(b.f.severity).toUpperCase()));
   const allFindingsText = formatFindingCount(ALL.length);
@@ -219,7 +221,7 @@ function render(){
     <h1>Dashboard</h1>
     <p class="sub">${findingsText} · <strong>${blocking}</strong> deploy-blocking (gate ${blocking?'active':'clear'})</p>
     <div class="cards">${cards}
-      <div class="card"><div class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</div><div class="n">${blocking}</div></div>
+      <button type="button" id="filter-blocking" class="card" aria-label="Filter by Deploy-blocking: ${blocking}" aria-pressed="${filterBlocking}" onclick="filterBlocking = !filterBlocking; render();" style="${filterBlocking ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary); cursor:pointer;' : 'cursor:pointer;'}"><span class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</span><span class="n">${blocking}</span></button>
     </div>
     <div class="grid2">
       <div class="panel"><h2>Findings by category</h2><div class="rowlist">${catRows||'<div class="r">—</div>'}</div></div>
@@ -235,7 +237,7 @@ function render(){
           <thead><tr><th scope="col">Severity</th><th scope="col">Finding</th><th scope="col">File</th><th scope="col">Category</th><th scope="col">Status</th></tr></thead>
           <tbody>${rows||`<tr><td colspan="5" style="padding:32px 24px;text-align:center">
           <div style="color:var(--text);font-weight:600;font-size:14px;margin-bottom:8px">No findings match the filter</div>
-          <button type="button" aria-label="Clear filters" onclick="query=''; filterSev=''; render(); document.getElementById('q')?.focus();" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font:inherit;color:var(--text);font-weight:500;transition:background 0.2s">Clear filters</button>
+          <button type="button" aria-label="Clear filters" onclick="query=''; filterSev=''; filterBlocking=false; render(); document.getElementById('q')?.focus();" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font:inherit;color:var(--text);font-weight:500;transition:background 0.2s">Clear filters</button>
         </td></tr>`}</tbody>
         </table></div>
       </div>
