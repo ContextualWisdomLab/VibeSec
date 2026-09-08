@@ -166,13 +166,16 @@
   fail as `claude-plugin-pub-publish-command`. ``hex publish`` and
   ``mix hex.publish`` fail as `claude-plugin-hex-publish-command`.
   ``conda upload`` and ``anaconda upload`` fail as
-  `claude-plugin-conda-upload-command`.
+  `claude-plugin-conda-upload-command`. ``cabal upload`` and
+  ``cabal v2-upload`` fail as `claude-plugin-cabal-upload-command`.
+  ``mvn deploy`` fails as `claude-plugin-mvn-deploy-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
-  ``nuget list``, ``hex info``, and ``conda list``
+  ``nuget list``, ``hex info``, ``conda list``, ``cabal list``, and
+  ``mvn package``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

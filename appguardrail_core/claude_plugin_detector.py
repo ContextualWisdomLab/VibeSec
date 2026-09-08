@@ -373,6 +373,16 @@ CLAUDE_PLUGIN_CONDA_UPLOAD_COMMAND_MESSAGE: Final = (
     "package is write authority on Anaconda.org. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_CABAL_UPLOAD_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs cabal upload. Publishing a "
+    "package is write authority on Hackage. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_MVN_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs mvn deploy. Publishing a "
+    "package is write authority on a Maven repository. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -534,6 +544,14 @@ _HEX_PUBLISH_COMMAND = re.compile(
 )
 _CONDA_UPLOAD_COMMAND = re.compile(
     r"\b(?P<cli>conda|anaconda)\s+upload\b",
+    re.IGNORECASE,
+)
+_CABAL_UPLOAD_COMMAND = re.compile(
+    r"\bcabal\s+(?P<verb>(?:v2-)?upload)\b",
+    re.IGNORECASE,
+)
+_MVN_DEPLOY_COMMAND = re.compile(
+    r"\bmvn\s+deploy\b",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -822,7 +840,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"(?:dotnet\s+)?nuget\s+push|"
             r"(?:dart\s+|flutter\s+)?pub\s+publish|"
             r"mix\s+hex\.publish|hex\s+publish|"
-            r"(?:conda|anaconda)\s+upload)\b",
+            r"(?:conda|anaconda)\s+upload|"
+            r"cabal\s+(?:v2-)?upload|"
+            r"mvn\s+deploy)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1053,6 +1073,8 @@ def inspect_claude_plugin_file(
         hits.extend(_pub_publish_command_hits(content, manifest=manifest))
         hits.extend(_hex_publish_command_hits(content, manifest=manifest))
         hits.extend(_conda_upload_command_hits(content, manifest=manifest))
+        hits.extend(_cabal_upload_command_hits(content, manifest=manifest))
+        hits.extend(_mvn_deploy_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2596,6 +2618,64 @@ def _conda_upload_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet=snippet,
                 message=CLAUDE_PLUGIN_CONDA_UPLOAD_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _cabal_upload_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``cabal upload`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``cabal upload`` or ``cabal v2-upload``.
+        ``cabal list`` is not this class. ``hex publish`` stays the
+        Hex.pm class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _CABAL_UPLOAD_COMMAND)
+        if match is None:
+            continue
+        snippet = "cabal " + match.group("verb").lower()
+        return (
+            PluginHit(
+                rule_id="claude-plugin-cabal-upload-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_CABAL_UPLOAD_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _mvn_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``mvn deploy`` findings with a command label, not artifact names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``mvn deploy`` or ``mvn deploy:deploy-file``.
+        ``mvn package`` is not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _MVN_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-mvn-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="mvn deploy",
+                message=CLAUDE_PLUGIN_MVN_DEPLOY_COMMAND_MESSAGE,
             ),
         )
     return ()
