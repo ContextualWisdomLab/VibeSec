@@ -900,7 +900,7 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         "package_install",
         re.compile(
             r"(?<![A-Za-z0-9_])(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
-            r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
+            r"(?<![A-Za-z0-9_])(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
             r"uv\s+publish|poetry\s+publish|gem\s+push|"
             r"(?:dotnet\s+)?nuget\s+push|"
             r"(?:dart\s+|flutter\s+)?pub\s+publish|"
