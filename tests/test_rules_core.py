@@ -28,7 +28,7 @@ def test_extract_public_references_deduplicates_in_first_seen_order():
 
 def test_extract_public_references_skips_regex_without_opening_bracket(monkeypatch):
     class RejectRegex:
-        def finditer(self, _message):
+        def finditer(self, _message):  # pragma: no cover
             raise AssertionError("regex engine must not run on the no-bracket fast path")
 
     monkeypatch.setattr(rules_module, "REFERENCE_RE", RejectRegex())
