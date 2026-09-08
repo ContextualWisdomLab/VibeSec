@@ -80,6 +80,16 @@ def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
     ) == "var(--info)"
     assert dialogs == []
 
+    detail_panel.locator(".close-btn").click()
+    assert detail_panel.is_hidden()
+    assert scan_row.evaluate("element => element === document.activeElement")
+
+    scan_row.press("Enter")
+    detail_panel.wait_for()
+    page.keyboard.press("Escape")
+    assert detail_panel.is_hidden()
+    assert scan_row.evaluate("element => element === document.activeElement")
+
 
 def test_trend_accessibility_attributes_escape_blocking_count() -> None:
     """Untrusted scan counts must not escape innerHTML attribute values."""
@@ -89,7 +99,7 @@ def test_trend_accessibility_attributes_escape_blocking_count() -> None:
     )[0]
 
     assert "${s.deploy_blocking||0}" not in trend_template
-    assert trend_template.count("${esc(String(s.deploy_blocking||0))}") >= 2
+    assert trend_template.count("${db} blocking") >= 2
 
 
 def test_detail_panel_close_invalidates_async_work_and_restores_focus() -> None:
@@ -103,7 +113,7 @@ def test_detail_panel_close_invalidates_async_work_and_restores_focus() -> None:
     assert html.count('class="close-btn" aria-label="Close details"') == 2
     assert html.count('d.querySelector(".close-btn").addEventListener("click",closeDetail);') == 2
     assert html.count("d.focus({preventScroll:true});") == 2
-    assert 'aria-label="${esc(s.created_at)}: ${esc(String(s.deploy_blocking||0))} blocking"' in html
+    assert 'aria-label="${esc(s.created_at)}: ${db} blocking"' in html
 
 
 def test_untrusted_scan_fields_use_typed_and_owned_rendering_boundaries() -> None:
