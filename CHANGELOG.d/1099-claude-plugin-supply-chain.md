@@ -155,7 +155,11 @@
   `claude-plugin-az-containerapp-up-command`. ``npm publish`` fails as
   `claude-plugin-npm-publish-command`. ``twine upload`` fails as
   `claude-plugin-pypi-upload-command`. ``cargo publish`` fails as
-  `claude-plugin-cargo-publish-command`.
+  `claude-plugin-cargo-publish-command`. ``pnpm publish`` fails as
+  `claude-plugin-pnpm-publish-command`. ``uv publish`` fails as
+  `claude-plugin-uv-publish-command`. ``poetry publish`` fails as
+  `claude-plugin-poetry-publish-command`. ``yarn npm publish`` stays
+  `claude-plugin-npm-publish-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,

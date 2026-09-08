@@ -18,6 +18,8 @@ _TERRAFORM_RULE = "claude-plugin-terraform-apply-command"
 _HELM_RULE = "claude-plugin-helm-install-command"
 _KUBECTL_RULE = "claude-plugin-kubectl-apply-command"
 _DOCKER_PUSH_RULE = "claude-plugin-docker-push-command"
+_VERCEL_RULE = "claude-plugin-vercel-deploy-command"
+_FLY_RULE = "claude-plugin-fly-deploy-command"
 _SECRET = "sk-tf-must-not-leak"
 _BIDI = "\u202e"
 _THIS_CLASS = frozenset({_TERRAFORM_RULE, _HELM_RULE})
@@ -100,8 +102,8 @@ def test_terraform_plan_and_helm_list_stay_inventory(tmp_path: Path) -> None:
     assert receipt.scan_result == "pass"
 
 
-def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
-    """Hosted deploy CLIs stay inventory; this slice does not own them."""
+def test_vercel_deploy_and_fly_deploy_are_not_this_class(tmp_path: Path) -> None:
+    """Hosted deploy CLIs stay later successor classes, not terraform/helm."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nvercel deploy\nfly deploy\n",
@@ -110,7 +112,9 @@ def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
+    assert _VERCEL_RULE in receipt.finding_summary
+    assert _FLY_RULE in receipt.finding_summary
+    assert receipt.scan_result == "fail"
     assert inventory["deployment_write"] is True
 
 
