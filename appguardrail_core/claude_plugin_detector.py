@@ -2011,6 +2011,33 @@ def _az_deploy_command_hits(
     return ()
 
 
+def _is_literal_s3_download(
+    content: str, match: re.Match[str]
+) -> bool:
+    """Return whether one direct S3 command provably reads to a local path."""
+    line_start = content.rfind("\n", 0, match.start()) + 1
+    line_end = content.find("\n", match.start())
+    if line_end < 0:
+        line_end = len(content)
+    line = content[line_start:line_end]
+    relative = match.start() - line_start
+    command_end = match.end() - line_start
+    for start, end in _iter_unquoted_segment_bounds(line):
+        if start <= relative < end:
+            operands = line[command_end:end].split()
+            return (
+                len(operands) == 2
+                and operands[0].lower().startswith("s3://")
+                and not operands[1].lower().startswith("s3://")
+                and not operands[1].startswith("-")
+                and all(
+                    re.fullmatch(r"[A-Za-z0-9._~:/+-]+", operand)
+                    for operand in operands
+                )
+            )
+    return False
+
+
 def _aws_s3_write_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
@@ -2027,6 +2054,8 @@ def _aws_s3_write_command_hits(
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
         match = _executable_command_match(source, _AWS_S3_WRITE_COMMAND)
         if match is None:
+            continue
+        if _is_literal_s3_download(source, match):
             continue
         verb = match.group("verb").lower()
         return (
