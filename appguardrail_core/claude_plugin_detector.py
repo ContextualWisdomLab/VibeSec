@@ -1757,7 +1757,45 @@ def _executable_command_match(
     return None
 
 
-def _terraform_apply_command_hits(\n    content: str, *, manifest: bool = False\n) -> tuple[PluginHit, ...]:\n    """Return executable terraform apply findings without vars."""\n    for source, first_line in _hosted_command_sources(content, manifest=manifest):\n        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)\n        if match is None:\n            continue\n        return (\n            PluginHit(\n                rule_id="claude-plugin-terraform-apply-command",\n                line=first_line + source[: match.start()].count("\\n"),\n                snippet="terraform apply",\n                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,\n            ),\n        )\n    return ()\n\n\ndef _helm_install_command_hits(\n    content: str, *, manifest: bool = False\n) -> tuple[PluginHit, ...]:\n    """Return executable helm install findings without chart names."""\n    for source, first_line in _hosted_command_sources(content, manifest=manifest):\n        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)\n        if match is None:\n            continue\n        return (\n            PluginHit(\n                rule_id="claude-plugin-helm-install-command",\n                line=first_line + source[: match.start()].count("\\n"),\n                snippet="helm install",\n                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,\n            ),\n        )\n    return ()\n\n\ndef _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
+def _terraform_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable terraform apply findings without vars."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-terraform-apply-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="terraform apply",
+                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _helm_install_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable helm install findings without chart names."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-helm-install-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="helm install",
+                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
     """Return findings for eval/exec/compile/Function on hook surfaces."""
     match = _DYNAMIC_EVAL.search(content)
     if match is None:
