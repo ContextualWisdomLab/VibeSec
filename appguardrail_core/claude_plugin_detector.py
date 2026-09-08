@@ -378,9 +378,20 @@ _REPORTING_BUILTINS: Final = frozenset(
 )
 _SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
 _SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efilsuvx")
-_BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("r")
+_BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("abhkmprtBCEHPT")
 _BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
-    {"--login", "--noprofile", "--norc", "--posix", "--restricted", "--verbose"}
+    {
+        "--debug",
+        "--debugger",
+        "--login",
+        "--noediting",
+        "--noprofile",
+        "--norc",
+        "--posix",
+        "--pretty-print",
+        "--restricted",
+        "--verbose",
+    }
 )
 _SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
