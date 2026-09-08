@@ -377,10 +377,10 @@ _REPORTING_BUILTINS: Final = frozenset(
     {":", "echo", "false", "print", "printf", "true"}
 )
 _SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
-_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efluvx")
+_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efilsuvx")
 _BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("r")
 _BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
-    {"--noprofile", "--norc", "--posix", "--restricted", "--verbose"}
+    {"--login", "--noprofile", "--norc", "--posix", "--restricted", "--verbose"}
 )
 _SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
@@ -2016,8 +2016,6 @@ def _shell_payload_index(
         if "n" in flags:
             return None
         if "c" in flags:
-            if flags.count("c") != 1:
-                return None
             payload_index = index + 1
             return payload_index if payload_index < len(arguments) else None
     return None
