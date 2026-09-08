@@ -368,8 +368,10 @@ _DOCKER_PUSH_COMMAND = re.compile(
 )
 _TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
 _HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
-_REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
-_FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
+_REPORTING_BUILTINS: Final = frozenset(
+    {":", "echo", "false", "print", "printf", "true"}
+)
+_FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
 _LITERAL_HEREDOC_OPEN = re.compile(
     r"<<(?P<strip>-)?[ \t]*(?P<quote>['\"]?)"
     r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
@@ -1683,13 +1685,13 @@ def _first_shell_token(segment: str) -> str:
 
 
 def _is_reporting_builtin_segment(segment: str) -> bool:
-    """Return whether the segment only prints text instead of running a CLI.
+    """Return whether the command does not execute its argument text.
 
     Args:
         segment: One unquoted command fragment.
 
     Returns:
-        ``True`` for ``echo``, ``printf``, and ``print``, including path
+        ``True`` for no-op, status, and reporting commands, including path
         and ``.exe`` spellings.
     """
     return _first_shell_token(segment) in _REPORTING_BUILTINS
