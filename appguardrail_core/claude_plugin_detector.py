@@ -403,6 +403,16 @@ CLAUDE_PLUGIN_CONAN_UPLOAD_COMMAND_MESSAGE: Final = (
     "package is write authority on Conan Center. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_DENO_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs deno publish. Publishing a "
+    "package is write authority on JSR. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_POD_TRUNK_PUSH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs pod trunk push. Publishing a "
+    "podspec is write authority on CocoaPods trunk. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -589,6 +599,19 @@ _SBT_PUBLISH_COMMAND = re.compile(
 )
 _CONAN_UPLOAD_COMMAND = re.compile(
     r"\bconan\s+upload\b",
+    re.IGNORECASE,
+)
+_DENO_PUBLISH_COMMAND = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<cli_quote>['\"]?)deno(?P=cli_quote)"
+    r"[ \t]+(?P<quote>['\"]?)publish(?P=quote)"
+    r"(?=$|[ \t;&|`\)])",
+    re.IGNORECASE,
+)
+_POD_TRUNK_PUSH_COMMAND = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<cli_quote>['\"]?)pod(?P=cli_quote)"
+    r"[ \t]+(?P<trunk_quote>['\"]?)trunk(?P=trunk_quote)"
+    r"[ \t]+(?P<push_quote>['\"]?)push(?P=push_quote)"
+    r"(?=$|[ \t;&|`\)])",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -876,8 +899,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
     (
         "package_install",
         re.compile(
-            r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
-            r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
+            r"(?<![A-Za-z0-9_])(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
+            r"(?<![A-Za-z0-9_])(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
             r"uv\s+publish|poetry\s+publish|gem\s+push|"
             r"(?:dotnet\s+)?nuget\s+push|"
             r"(?:dart\s+|flutter\s+)?pub\s+publish|"
@@ -888,7 +911,12 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"gradlew?\s+publish|"
             r"luarocks\s+upload|"
             r"sbt\s+publish(?:Signed)?|"
-            r"conan\s+upload)\b",
+            r"conan\s+upload|"
+            r"(?:deno|\"deno\"|'deno')[ \t]+"
+            r"(?:publish|\"publish\"|'publish')|"
+            r"(?:pod|\"pod\"|'pod')[ \t]+"
+            r"(?:trunk|\"trunk\"|'trunk')[ \t]+"
+            r"(?:push|\"push\"|'push'))(?![A-Za-z0-9_])",
             re.IGNORECASE,
         ),
     ),
@@ -1125,6 +1153,8 @@ def inspect_claude_plugin_file(
         hits.extend(_luarocks_upload_command_hits(content, manifest=manifest))
         hits.extend(_sbt_publish_command_hits(content, manifest=manifest))
         hits.extend(_conan_upload_command_hits(content, manifest=manifest))
+        hits.extend(_deno_publish_command_hits(content, manifest=manifest))
+        hits.extend(_pod_trunk_push_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2893,6 +2923,62 @@ def _conan_upload_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="conan upload",
                 message=CLAUDE_PLUGIN_CONAN_UPLOAD_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _deno_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``deno publish`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``deno publish``. ``deno info`` is not
+        this class. ``sbt publish`` stays the sbt class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _DENO_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-deno-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="deno publish",
+                message=CLAUDE_PLUGIN_DENO_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _pod_trunk_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``pod trunk push`` findings with a command label, not pod names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``pod trunk push``. ``pod install`` and
+        ``pod lib lint`` are not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _POD_TRUNK_PUSH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-pod-trunk-push-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="pod trunk push",
+                message=CLAUDE_PLUGIN_POD_TRUNK_PUSH_COMMAND_MESSAGE,
             ),
         )
     return ()

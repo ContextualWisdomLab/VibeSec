@@ -174,6 +174,9 @@
   `claude-plugin-luarocks-upload-command`. ``sbt publish`` and
   ``sbt publishSigned`` fail as `claude-plugin-sbt-publish-command`.
   ``conan upload`` fails as `claude-plugin-conan-upload-command`.
+  Quoted or unquoted exact ``deno publish`` tasks fail as
+  `claude-plugin-deno-publish-command`. Quoted or unquoted exact
+  ``pod trunk push`` tasks fail as `claude-plugin-pod-trunk-push-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
@@ -181,7 +184,7 @@
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
   ``nuget list``, ``hex info``, ``conda list``, ``cabal list``,
   ``mvn package``, ``gradle tasks``, ``luarocks list``, ``sbt compile``,
-  and ``conan list``
+  ``conan list``, ``deno info``, and ``pod install``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

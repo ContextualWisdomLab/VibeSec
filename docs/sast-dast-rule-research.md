@@ -129,6 +129,10 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-luarocks-upload-command` for ``luarocks upload``,
   `claude-plugin-sbt-publish-command` for ``sbt publish``,
   `claude-plugin-conan-upload-command` for ``conan upload``,
+  `claude-plugin-deno-publish-command` for quoted or unquoted exact
+  ``deno publish`` tasks,
+  `claude-plugin-pod-trunk-push-command` for quoted or unquoted exact
+  ``pod trunk push`` tasks,
   and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
@@ -140,7 +144,7 @@ files being scanned, then applies the union of relevant checks. Examples:
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
   ``nuget list``, ``hex info``, ``conda list``, ``cabal list``,
   ``mvn package``, ``gradle tasks``, ``luarocks list``, ``sbt compile``,
-  and ``conan list`` stay inventory.
+  ``conan list``, ``deno info``, and ``pod install`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
