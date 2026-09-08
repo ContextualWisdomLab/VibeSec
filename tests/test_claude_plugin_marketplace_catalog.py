@@ -1,4 +1,4 @@
-"""Canonical marketplace catalog contracts for the Claude plugin scan CLI."""
+"""Canonical marketplace catalog contracts for Claude plugin scan admission."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from io import StringIO
 import json
 from pathlib import Path
 
+from appguardrail_core.claude_plugin_detector import build_claude_plugin_scan_receipt
 from appguardrail_core.claude_plugin_scan_cli import scan_plugin_artifact
 
 
@@ -61,6 +62,11 @@ def _canonical_entry(name: str = "safe-plugin") -> dict[str, object]:
     }
 
 
+def _catalog_bytes(payload: object) -> bytes:
+    """Return the exact deterministic bytes supplied to receipt hashing."""
+    return (json.dumps(payload, indent=2) + "\n").encode()
+
+
 def _scan(root: Path, catalog: Path) -> tuple[int, str, str]:
     """Run the public adapter with captured streams."""
     stdout = StringIO()
@@ -114,3 +120,43 @@ def test_scan_rejects_duplicate_named_catalog_entries(tmp_path: Path) -> None:
     assert code != 0
     assert stdout == ""
     assert "matching plugin entry" in stderr
+
+
+def test_receipt_api_selects_named_plugin_from_multi_plugin_catalog(
+    tmp_path: Path,
+) -> None:
+    """Direct receipt callers must bind the materialized plugin, not entry zero."""
+    root = _plugin(tmp_path / "plugin")
+    catalog = _catalog(_canonical_entry("unrelated-plugin"), _canonical_entry())
+
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog,
+        catalog_bytes=_catalog_bytes(catalog),
+    )
+
+    assert receipt.scan_result == "pass"
+    assert receipt.catalog_repository == _CATALOG_REPOSITORY
+    assert receipt.catalog_commit_sha == _PINNED_COMMIT
+    assert receipt.plugin_name == "safe-plugin"
+    assert receipt.source_repository == _PLUGIN_REPOSITORY
+    assert receipt.source_commit_sha == _PINNED_COMMIT
+    assert "claude-plugin-source-mismatch" not in receipt.finding_summary
+    assert "claude-plugin-floating-git-ref" not in receipt.finding_summary
+
+
+def test_receipt_api_fails_closed_on_duplicate_named_catalog_entries(
+    tmp_path: Path,
+) -> None:
+    """Direct receipt admission cannot silently choose one duplicate identity."""
+    root = _plugin(tmp_path / "plugin")
+    catalog = _catalog(_canonical_entry(), _canonical_entry())
+
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog,
+        catalog_bytes=_catalog_bytes(catalog),
+    )
+
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-source-mismatch" in receipt.finding_summary
