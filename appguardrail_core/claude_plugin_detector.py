@@ -1320,15 +1320,25 @@ def _select_marketplace_entry(
         return selected
     if not isinstance(plugins, list):
         raise _MarketplaceCatalogError("invalid plugins collection")
-    normalized_entries = [
-        _normalize_marketplace_entry(entry, plugin_root=plugin_root)
-        for entry in plugins
-    ]
-    matches = [entry for entry in normalized_entries if entry["name"] == plugin_name]
+    matches: list[dict[str, object]] = []
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            raise _MarketplaceCatalogError("invalid plugin entry")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise _MarketplaceCatalogError("invalid plugin name")
+        version = entry.get("version")
+        if version is not None and not isinstance(version, str):
+            raise _MarketplaceCatalogError("invalid plugin version")
+        if name == plugin_name:
+            matches.append(entry)
     if len(matches) != 1:
         raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
+    normalized_match = _normalize_marketplace_entry(
+        matches[0], plugin_root=plugin_root
+    )
     selected = dict(payload)
-    selected["plugins"] = matches
+    selected["plugins"] = [normalized_match]
     return selected
 
 
