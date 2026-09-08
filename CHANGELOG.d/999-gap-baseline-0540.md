@@ -1,3 +1,3 @@
-# Gap baseline snapshot 2026-09-07 05:40 UTC
+# Gap baseline snapshot 2026-09-08 05:25 UTC
 
-Records live exact-head evidence for the commercial-readiness loop: #998 coverage/bootstrap SUCCESS, #972 and #1006 non-force restacks onto `develop@e71d37e`, #1130 Draft under canonical #1107, and G-06 structural analyzer successor stacked on #1088. This is documentation of Proposed work, not a protected capability claim.
+Records live exact-head evidence for the commercial-readiness loop: #1036 skill-supply-chain repairs; #1173 structural command-context RED/GREEN; non-force, zero-behind #1174-#1177 stack integration; #1179 S3 direction and later-write regressions; #1180 registry-publish inheritance; and the canonical fail-closed assurance-state mapping. This documents Proposed work and exact candidate evidence, not a protected capability, approval, release, or certification claim.
