@@ -302,6 +302,14 @@ re-fetch docs/issues/PRs/current heads
 - **Downstream blocker:** #1174 `c069e93ed7ca0b82fd19179a6b68f671c3d0be20` remains 16 ahead / 36 behind #1173 from merge base `184b4b4f55906284ac1d8059e46cec8f0d9cfc9a`. Its hosted-deploy delta is preserved, but it remains Draft and not merge-ready until non-force integration and fresh exact-head evidence.
 - **Status boundary:** all custom-base candidates remain Proposed/Draft; local exact-tree verification is not hosted integration or GitHub approval. Quoted executable tokens, `env`/`sudo` wrappers, dynamic/multiline payloads, and downstream publish consumers remain incomplete, never Clean Scan evidence.
 
+
+## 2026-09-08 dashboard untrusted-JSON regression restoration
+
+- **Current security PR:** #1192 exact head `23a5f70d6224ca6e805935bcebe5496cdc210635` preserves the bounded production repair: numeric scan fields are coerced before `innerHTML`, scan identity is escaped at the `data-id` attribute, and normalized severity selects only an own property of the fixed `SEV` palette.
+- **Concurrent regression loss and repair:** commit `2e2c5152d427f4ef7db67fa0b1e9338d06d71a65` completed `Object.hasOwn` but deleted the committed security regression and restored an inaccurate prototype-mutation narrative. Descendant `4dcb191c016ab04e4ec1e017e81cab2d5b348e36` integrates the assertions into the existing dashboard security test owner; `fbbb869259520c889c34b57e2e4fc4cb042dcbe5` records the actual output-encoding/property-selection RCA; `23a5f70...` adds CHANGELOG traceability.
+- **Exact evidence:** test AST plus 12 source assertions pass with SyntaxWarning denied, covering the new typed/escaped/own-property sinks and excluding the old raw forms. The preceding #999 head `1e1000936c6e92d16b1c3de045f49e4c0ecbc66b` has 9/9 terminal successful workflows, but those results do not transfer after this baseline update.
+- **Status:** #1192 remains Draft. Browser hostile-payload/a11y execution, hosted exact-head Checks, and independent current-head review are incomplete; static source assertions are not substituted for those gates. The defect is innerHTML output-boundary confusion, not prototype mutation.
+
 ## Standards and acceptance basis
 
 These references guide control design; they are not a claim of CSAP, SOC 2, or another certification.
