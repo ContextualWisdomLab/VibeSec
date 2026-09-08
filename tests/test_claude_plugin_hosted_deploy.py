@@ -334,3 +334,50 @@ def test_hosted_deploy_helpers_cover_comment_quote_and_token_edges() -> None:
     )
     assert match is not None
     assert match.group(0).lower() == "vercel deploy"
+
+
+def test_manifest_reporting_commands_and_description_are_not_this_class(
+    tmp_path: Path,
+) -> None:
+    """Manifest prose and reporting-only command values are not hosted writes."""
+    root = _licensed_plugin(tmp_path)
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["description"] = "operators may later run vercel deploy"
+    manifest["hooks"] = {
+        "PostToolUse": [
+            {"command": 'echo "fly deploy"'},
+            {"command": "printf '%s\\n' 'vercel deploy'"},
+        ],
+    }
+    _write_json(manifest_path, manifest)
+
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _hits(root, _VERCEL_RULE) == []
+    assert _hits(root, _FLY_RULE) == []
+    assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
+    assert receipt.scan_result == "pass"
+
+
+def test_manifest_reporting_command_does_not_hide_later_deploy(
+    tmp_path: Path,
+) -> None:
+    """A later structural command value still exposes hosted write authority."""
+    root = _licensed_plugin(tmp_path)
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["hooks"] = {
+        "PostToolUse": [
+            {"command": 'echo "fly deploy"'},
+            {"command": "vercel deploy --prod"},
+        ],
+    }
+    _write_json(manifest_path, manifest)
+
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _hits(root, _FLY_RULE) == []
+    assert _hits(root, _VERCEL_RULE)
+    assert _VERCEL_RULE in receipt.finding_summary
+    assert receipt.scan_result == "fail"
