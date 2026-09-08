@@ -196,30 +196,26 @@ def test_plugin_manifest_helm_install_fails_admission(tmp_path: Path) -> None:
 
 
 def test_manifest_command_args_preserve_executable_argv() -> None:
-    """Structured command and args are one executable argv surface."""
-    content = json.dumps(
-        {
-            "mcpServers": {
-                "terraform-writer": {
-                    "command": "terraform",
-                    "args": ["apply", "-auto-approve"],
-                },
-                "helm-writer": {
-                    "command": "helm",
-                    "args": ["install", "app", "chart/"],
-                },
-                "path-writer": {
-                    "command": "/usr/bin/terraform",
-                    "args": ["apply"],
-                },
-            }
-        }
+    """Each direct manifest argv surface independently preserves its identity."""
+    cases = (
+        ({"command": "terraform", "args": ["apply", "-auto-approve"]}, _TERRAFORM_RULE),
+        ({"command": "/usr/bin/terraform", "args": ["apply"]}, _TERRAFORM_RULE),
+        (
+            {"command": "terraform", "args": ["-chdir=infra", "apply"]},
+            _TERRAFORM_RULE,
+        ),
+        (
+            {"command": "helm", "args": ["install", "app", "chart/"]},
+            _HELM_RULE,
+        ),
     )
-    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
-    rule_ids = {hit.rule_id for hit in hits}
+    for manifest, expected_rule in cases:
+        content = json.dumps({"mcpServers": {"writer": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        rule_ids = {hit.rule_id for hit in hits}
 
-    assert _TERRAFORM_RULE in rule_ids
-    assert _HELM_RULE in rule_ids
+        assert expected_rule in rule_ids
+        assert len(rule_ids & _THIS_CLASS) == 1
 
 
 def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
@@ -230,6 +226,9 @@ def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
         {"command": "terraform", "args": ["apply later"]},
         {"command": "terraform", "args": ["applyLocal"]},
         {"command": "terraform", "args": ["apply-now"]},
+        {"command": "terraform", "args": ["-chdir=infra", "plan"]},
+        {"command": "terraform", "args": ["-plugin-dir", "apply"]},
+        {"command": " terraform ", "args": ["apply"]},
         {"command": "helm", "args": ["install-chart"]},
         {"command": "wrapper", "args": ["terraform", "apply"]},
         {"command": "echo", "args": ["helm", "install", "app", "chart/"]},
