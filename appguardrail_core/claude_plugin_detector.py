@@ -377,6 +377,10 @@ _REPORTING_BUILTINS: Final = frozenset(
     {":", "echo", "false", "print", "printf", "true"}
 )
 _SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
+_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("eflnruvx")
+_BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
+    {"--noprofile", "--norc", "--posix", "--restricted", "--verbose"}
+)
 _SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
 _LITERAL_HEREDOC_OPEN = re.compile(
@@ -1986,15 +1990,27 @@ def _executable_command_match(    content: str, pattern: re.Pattern[str]
     return None
 
 
-def _shell_command_option(token: str) -> bool:
-    """Return whether one short shell option cluster requests -c execution."""
-    option = token.casefold()
-    return (
-        option.startswith("-")
-        and not option.startswith("--")
-        and option[1:].isalpha()
-        and "c" in option[1:]
-    )
+def _shell_payload_index(
+    arguments: tuple[str, ...] | list[str], *, shell_name: str
+) -> int | None:
+    """Return the payload index after bounded no-value options ending in -c."""
+    for index, token in enumerate(arguments):
+        if shell_name == "bash" and token in _BASH_NO_VALUE_LONG_OPTIONS:
+            continue
+        if not token.startswith("-") or token.startswith("--"):
+            return None
+        flags = token[1:]
+        if not flags or any(
+            flag not in _SHELL_NO_VALUE_SHORT_OPTIONS and flag != "c"
+            for flag in flags
+        ):
+            return None
+        if "c" in flags:
+            if flags.count("c") != 1 or not flags.endswith("c"):
+                return None
+            payload_index = index + 1
+            return payload_index if payload_index < len(arguments) else None
+    return None
 
 
 def _nested_shell_payload_sources(
@@ -2028,28 +2044,30 @@ def _nested_shell_payload_sources(
                     and _SHELL_ASSIGNMENT_PREFIX.match(tokens[token_index])
                 ):
                     token_index += 1
-                if token_index + 2 >= len(tokens):
+                if token_index >= len(tokens):
                     continue
-                if (
-                    _direct_executable_basename(tokens[token_index])
-                    not in _SHELL_COMMAND_INTERPRETERS
-                    or not _shell_command_option(tokens[token_index + 1])
-                ):
+                shell_name = _direct_executable_basename(tokens[token_index])
+                if shell_name not in _SHELL_COMMAND_INTERPRETERS:
                     continue
-                payload = tokens[token_index + 2]
+                shell_arguments = tokens[token_index + 1 :]
+                payload_index = _shell_payload_index(
+                    shell_arguments, shell_name=shell_name
+                )
+                if payload_index is None:
+                    continue
+                payload = shell_arguments[payload_index]
                 if payload:
                     found.append((payload, first_line + line_index))
             source_offset += len(raw_line)
 
     if manifest:
         for command, args, line in _manifest_argv_sources(content):
-            if (
-                _direct_executable_basename(command) in _SHELL_COMMAND_INTERPRETERS
-                and len(args) >= 2
-                and _shell_command_option(args[0])
-                and args[1]
-            ):
-                found.append((args[1], line))
+            shell_name = _direct_executable_basename(command)
+            if shell_name not in _SHELL_COMMAND_INTERPRETERS:
+                continue
+            payload_index = _shell_payload_index(args, shell_name=shell_name)
+            if payload_index is not None and args[payload_index]:
+                found.append((args[payload_index], line))
     return tuple(found)
 
 
