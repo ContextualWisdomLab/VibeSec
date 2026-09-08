@@ -118,6 +118,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-pnpm-publish-command` for ``pnpm publish``,
   `claude-plugin-uv-publish-command` for ``uv publish``,
   `claude-plugin-poetry-publish-command` for ``poetry publish``,
+  `claude-plugin-gem-push-command` for ``gem push``,
+  `claude-plugin-nuget-push-command` for ``nuget push``,
   and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
@@ -126,7 +128,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-github-write-token`. ``gh issue create``, ``gh pr review``,
   ``kubectl get``, ``docker ps``, ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
-  ``az account show``, ``npm pack``, and ``cargo check`` stay inventory.
+  ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
+  and ``nuget list`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
