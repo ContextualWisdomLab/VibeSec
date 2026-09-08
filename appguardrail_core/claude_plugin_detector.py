@@ -913,10 +913,10 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"sbt\s+publish(?:Signed)?|"
             r"conan\s+upload|"
             r"(?:deno|\"deno\"|'deno')[ \t]+"
-            r"(?:publish|\"publish(?=\")|'publish(?='))|"
+            r"(?:publish|\"publish\"|'publish')|"
             r"(?:pod|\"pod\"|'pod')[ \t]+"
             r"(?:trunk|\"trunk\"|'trunk')[ \t]+"
-            r"(?:push|\"push(?=\")|'push(?=')))\b",
+            r"(?:push|\"push\"|'push'))(?![A-Za-z0-9_])",
             re.IGNORECASE,
         ),
     ),
