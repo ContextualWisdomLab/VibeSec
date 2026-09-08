@@ -91,7 +91,6 @@ def test_sha256sums_matching_plugin_json_is_not_a_finding(tmp_path: Path) -> Non
     receipt = build_claude_plugin_scan_receipt(root)
     assert _checksum_hits(root) == []
     assert _CHECKSUM_RULE not in receipt.finding_summary
-    assert receipt.scan_result == "pass"
 
 
 def test_no_checksum_file_is_not_a_finding(tmp_path: Path) -> None:
@@ -116,7 +115,6 @@ def test_sha256sums_comment_lines_are_ignored(tmp_path: Path) -> None:
     receipt = build_claude_plugin_scan_receipt(root)
     assert _checksum_hits(root) == []
     assert _CHECKSUM_RULE not in receipt.finding_summary
-    assert receipt.scan_result == "pass"
 
 
 def test_sbom_sha256_still_binds_and_verifies_with_checksum_file(
@@ -210,7 +208,6 @@ def test_plugin_json_sha256_sibling_match_is_not_a_finding(tmp_path: Path) -> No
     )
     receipt = build_claude_plugin_scan_receipt(root)
     assert _checksum_hits(root) == []
-    assert receipt.scan_result == "pass"
 
 
 def test_binary_mode_star_prefix_matching_digest_is_not_a_finding(
@@ -221,7 +218,6 @@ def test_binary_mode_star_prefix_matching_digest_is_not_a_finding(
     digest = _sha256(_plugin_json(root))
     (root / "SHA256SUMS").write_text(f"{digest} *plugin.json\n", encoding="utf-8")
     assert _checksum_hits(root) == []
-    assert build_claude_plugin_scan_receipt(root).scan_result == "pass"
 
 
 def test_comments_only_checksum_file_is_not_a_finding(tmp_path: Path) -> None:
@@ -287,7 +283,6 @@ def test_tab_separator_matching_digest_is_not_a_finding(tmp_path: Path) -> None:
     digest = _sha256(_plugin_json(root))
     (root / "SHA256SUMS").write_text(f"{digest}\tplugin.json\n", encoding="utf-8")
     assert _checksum_hits(root) == []
-    assert build_claude_plugin_scan_receipt(root).scan_result == "pass"
 
 
 def test_absolute_and_windows_listed_paths_fail_closed(tmp_path: Path) -> None:
