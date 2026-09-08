@@ -602,11 +602,14 @@ _CONAN_UPLOAD_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _DENO_PUBLISH_COMMAND = re.compile(
-    r"\bdeno\s+publish\b",
+    r"\bdeno[ \t]+(?P<quote>['\"]?)publish(?P=quote)"
+    r"(?=$|[ \t;&|`\)])",
     re.IGNORECASE,
 )
 _POD_TRUNK_PUSH_COMMAND = re.compile(
-    r"\bpod\s+trunk\s+push\b",
+    r"\bpod[ \t]+(?P<trunk_quote>['\"]?)trunk(?P=trunk_quote)"
+    r"[ \t]+(?P<push_quote>['\"]?)push(?P=push_quote)"
+    r"(?=$|[ \t;&|`\)])",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -907,8 +910,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"luarocks\s+upload|"
             r"sbt\s+publish(?:Signed)?|"
             r"conan\s+upload|"
-            r"deno\s+publish|"
-            r"pod\s+trunk\s+push)\b",
+            r"deno[ \t]+(?:publish|\"publish\"|'publish')|"
+            r"pod[ \t]+(?:trunk|\"trunk\"|'trunk')[ \t]+"
+            r"(?:push|\"push\"|'push'))\b",
             re.IGNORECASE,
         ),
     ),
