@@ -2188,6 +2188,11 @@ def test_marketplace_catalog_binding_validation_edges(tmp_path: Path) -> None:
     assert selected_source["repo"] == "example/hook-plugin"
     assert selected_source["ref"] == _PINNED_COMMIT
     assert detector._select_marketplace_entry(entry, root)["name"] == "hook-plugin"
+    with pytest.raises(detector._MarketplaceCatalogError):
+        detector._select_marketplace_entry(
+            {**entry, "name": "different-plugin"},
+            root,
+        )
 
     invalid_entries: list[object] = [
         "entry",

@@ -1227,6 +1227,19 @@ def _normalize_marketplace_entry(entry: object) -> dict[str, object]:
     if version is not None and not isinstance(version, str):
         raise _MarketplaceCatalogError("invalid plugin version")
     source = entry.get("source")
+    if isinstance(source, str):
+        normalized_path = source.replace("\\", "/")
+        path_parts = normalized_path[2:].split("/")
+        if (
+            not normalized_path.startswith("./")
+            or not path_parts
+            or any(part in {"", ".", ".."} for part in path_parts)
+            or _CONCEALED_CHAR.search(source)
+        ):
+            raise _MarketplaceCatalogError("invalid relative plugin source")
+        normalized = dict(entry)
+        normalized["source"] = {"path": normalized_path}
+        return normalized
     if not isinstance(source, dict):
         raise _MarketplaceCatalogError("invalid plugin source")
     normalized_source = dict(source)
@@ -1263,15 +1276,20 @@ def _select_marketplace_entry(
     """Select exactly one valid catalog entry for the materialized plugin."""
     if not isinstance(payload, dict):
         raise _MarketplaceCatalogError("invalid catalog document")
+    plugin_name = _plugin_identity(root)["plugin_name"]
+    if not plugin_name:
+        raise _MarketplaceCatalogError("materialized plugin identity is missing")
     plugins = payload.get("plugins")
     if plugins is None:
-        return _normalize_marketplace_entry(payload)
+        selected = _normalize_marketplace_entry(payload)
+        if selected["name"] != plugin_name:
+            raise _MarketplaceCatalogError("catalog entry does not match plugin")
+        return selected
     if not isinstance(plugins, list):
         raise _MarketplaceCatalogError("invalid plugins collection")
     normalized_entries = [_normalize_marketplace_entry(entry) for entry in plugins]
-    plugin_name = _plugin_identity(root)["plugin_name"]
     matches = [entry for entry in normalized_entries if entry["name"] == plugin_name]
-    if not plugin_name or len(matches) != 1:
+    if len(matches) != 1:
         raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
     selected = dict(payload)
     selected["plugins"] = matches
