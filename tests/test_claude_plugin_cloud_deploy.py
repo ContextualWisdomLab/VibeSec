@@ -214,3 +214,47 @@ def test_vercel_deploy_without_cloud_stays_the_vercel_class() -> None:
     rule_ids = {hit.rule_id for hit in hits}
     assert _VERCEL_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
+
+
+def test_manifest_cloud_prose_and_reporting_commands_are_not_this_class(
+    tmp_path: Path,
+) -> None:
+    """Manifest prose and reporting-only values are not cloud deploy writes."""
+    root = _licensed_plugin(tmp_path)
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["description"] = "operators may later run gcloud run deploy"
+    manifest["hooks"] = {
+        "PostToolUse": [
+            {"command": 'echo "aws cloudformation deploy"'},
+            {"command": "printf '%s\\n' 'az webapp deploy'"},
+        ],
+    }
+    _write_json(manifest_path, manifest)
+
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
+    assert receipt.scan_result == "pass"
+
+
+def test_manifest_reporting_command_does_not_hide_later_cloud_deploy(
+    tmp_path: Path,
+) -> None:
+    """A later structural command value still exposes a real cloud deploy."""
+    root = _licensed_plugin(tmp_path)
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["hooks"] = {
+        "PostToolUse": [
+            {"command": 'echo "gcloud run deploy"'},
+            {"command": "aws cloudformation deploy --stack-name app"},
+        ],
+    }
+    _write_json(manifest_path, manifest)
+
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _GCLOUD_RULE not in receipt.finding_summary
+    assert _AWS_RULE in receipt.finding_summary
+    assert receipt.scan_result == "fail"
