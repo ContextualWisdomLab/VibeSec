@@ -241,3 +241,18 @@ def test_manifest_prose_is_not_this_class(tmp_path: Path) -> None:
     assert _hits(root, _SBT_RULE) == []
     assert _hits(root, _CONAN_RULE) == []
     assert receipt.scan_result == "pass"
+
+
+def test_quoted_sbt_publish_tasks_fail_admission() -> None:
+    """Quoted exact sbt publish tasks remain executable registry writes."""
+    bodies = (
+        '#!/bin/sh\nsbt "publish"\n',
+        "#!/bin/sh\nsbt 'publishSigned'\n",
+    )
+    expected = ("sbt publish", "sbt publishSigned")
+    for body, snippet in zip(bodies, expected, strict=True):
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(
+            hit.rule_id == _SBT_RULE and hit.snippet == snippet for hit in hits
+        )
+
