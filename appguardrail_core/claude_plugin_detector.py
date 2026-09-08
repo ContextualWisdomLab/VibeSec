@@ -1910,14 +1910,73 @@ def _hosted_command_sources(
     return ((content, 1),)
 
 
+def _shell_command_context_start(line: str, offset: int) -> int | None:
+    """Return the executable shell-frame start containing ``offset``.
+
+    Args:
+        line: One hook or manifest command line.
+        offset: Zero-based match offset within ``line``.
+
+    Returns:
+        The start of the root, ``$(...)``, or backtick command frame.
+        ``None`` means the offset is inert single- or double-quoted prose.
+    """
+    frames: list[tuple[str, int, str, int]] = [("", 0, "", 0)]
+    escaped = False
+    index = 0
+    while index < offset:
+        frame_end, frame_start, quote, depth = frames[-1]
+        char = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and quote != '"':
+            frames[-1] = (frame_end, frame_start, "" if quote == "'" else "'", depth)
+            index += 1
+            continue
+        if char == '"' and quote != "'":
+            frames[-1] = (frame_end, frame_start, "" if quote == '"' else '"', depth)
+            index += 1
+            continue
+        if quote != "'" and line[index : index + 2] == "$(":
+            frames.append((")", index + 2, "", 1))
+            index += 2
+            continue
+        if quote != "'" and char == "`":
+            if frame_end == "`":
+                frames.pop()
+            else:
+                frames.append(("`", index + 1, "", 0))
+            index += 1
+            continue
+        if quote:
+            index += 1
+            continue
+        if frame_end == ")" and char == "(":
+            frames[-1] = (frame_end, frame_start, quote, depth + 1)
+        elif frame_end == ")" and char == ")":
+            if depth == 1:
+                frames.pop()
+            else:
+                frames[-1] = (frame_end, frame_start, quote, depth - 1)
+        index += 1
+    _frame_end, frame_start, quote, _depth = frames[-1]
+    return None if quote else frame_start
+
+
 def _executable_command_match(
     content: str, pattern: re.Pattern[str]
 ) -> re.Match[str] | None:
     """Return the first regex match that is an executable command context.
 
-    Unquoted ``#`` comments and ``echo``/``printf``/``print`` segments are
-    not executable. Manifest JSON command strings remain searchable
-    because they are not reporting builtins.
+    Unquoted ``#`` comments, quoted prose, and
+    ``echo``/``printf``/``print`` segments are not executable. Direct
+    commands inside ``$(...)`` or backticks remain executable.
 
     Args:
         content: Hook or manifest text.
@@ -1935,17 +1994,22 @@ def _executable_command_match(
             line_end = len(content)
         line = content[line_start:line_end]
         relative = match.start() - line_start
-        comment_at = _unquoted_hash_index(line)
-        if comment_at is not None and relative >= comment_at:
+        context_start = _shell_command_context_start(line, relative)
+        if context_start is None:
             continue
-        for start, end in _iter_unquoted_segment_bounds(line):
-            if start <= relative < end:
-                if not _is_reporting_builtin_segment(line[start:end]):
+        context = line[context_start:]
+        context_relative = relative - context_start
+        comment_at = _unquoted_hash_index(context)
+        if comment_at is not None and context_relative >= comment_at:
+            continue
+        for segment_start, segment_end in _iter_unquoted_segment_bounds(context):
+            if segment_start <= context_relative < segment_end:
+                if not _is_reporting_builtin_segment(
+                    context[segment_start:segment_end]
+                ):
                     return match
                 break
     return None
-
-
 def _vercel_deploy_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
