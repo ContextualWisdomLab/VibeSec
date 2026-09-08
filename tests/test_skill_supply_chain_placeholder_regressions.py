@@ -43,3 +43,39 @@ def test_placeholder_detector_does_not_flag_rendered_skill_names(tmp_path, name_
     manifest.write_text(f"---\n{name_line}\ndescription: real skill\n---\n", encoding="utf-8")
 
     assert RULE_ID not in _rule_ids(manifest, tmp_path)
+
+@pytest.mark.parametrize(
+    ("relative_path", "content"),
+    [
+        ("skill.json", '{"name":"{skill-name}","description":"template"}'),
+        ("nested/tool.skill.md", "---\n{name: {skill-name}}\n---\n"),
+        ("nested/SKILL.md", "---\n{name: {{SKILL_NAME}}}\n---\n"),
+    ],
+)
+def test_placeholder_detector_flags_json_and_flow_yaml_manifest_formats(
+    tmp_path, relative_path, content
+):
+    """Supported JSON and flow-YAML skill manifests must not hide placeholders."""
+    manifest = tmp_path / relative_path
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(content, encoding="utf-8")
+
+    assert RULE_ID in _rule_ids(manifest, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "content"),
+    [
+        ("skill.json", '{"name":"read_data","description":"name: {skill-name}"}'),
+        ("nested/tool.skill.md", "---\n{name: read_data}\n---\n"),
+    ],
+)
+def test_placeholder_detector_ignores_rendered_structural_names_and_prose(
+    tmp_path, relative_path, content
+):
+    """Rendered identifiers and placeholder-like description prose stay negative."""
+    manifest = tmp_path / relative_path
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(content, encoding="utf-8")
+
+    assert RULE_ID not in _rule_ids(manifest, tmp_path)
