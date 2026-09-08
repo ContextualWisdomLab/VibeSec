@@ -155,9 +155,9 @@ async function detail(id,tr){
   try{
     const s=await api("/api/v1/scans/"+id);
     if(requestId!==currentDetailRequest)return;
-    const rows=(s.findings||[]).map(f=>`<tr><td><span class="pill" style="background:${SEV[String(f.severity).toUpperCase()]||'var(--info)'}">${esc(f.severity)}</span></td>
+    const rows=(s.findings||[]).map(f=>{const severityKey=String(f.severity).toUpperCase(); return `<tr><td><span class="pill" style="background:${Object.hasOwn(SEV,severityKey)?SEV[severityKey]:'var(--info)'}">${esc(f.severity)}</span></td>
       <td><code>${esc(f.rule_id)}</code></td><td>${esc((f.message||"").split("\n")[0].slice(0,120))}</td>
-      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`).join("");
+      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`;}).join("");
     d.innerHTML=`<button type="button" class="close-btn" aria-label="Close details">✕</button><strong>Scan #${esc(s.id)}</strong> <span class="muted">${esc(s.created_at)} · ${esc(s.repo||"—")}</span>
       <table style="margin-top:8px"><thead><tr><th scope="col">Severity</th><th scope="col">Rule</th><th scope="col">Finding</th><th scope="col">Location</th></tr></thead>
       <tbody>${rows||'<tr><td colspan="4" class="muted">No findings.</td></tr>'}</tbody></table>`;
