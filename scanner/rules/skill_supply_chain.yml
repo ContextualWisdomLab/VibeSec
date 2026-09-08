@@ -57,7 +57,7 @@ rules:
 
   - id: skill-placeholder-template-unresolved
     patterns:
-      - pattern-regex: '(?im)^name:\s*["'']?\{\{?[A-Za-z][A-Za-z0-9_-]*\}\}?["'']?\s*$'
+      - pattern-regex: '(?im)(?:^[ \\t]*name[ \\t]*:[ \\t]*["'']?\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["'']?[ \\t]*$|^[ \\t]*\\{?[ \\t]*["'']name["''][ \\t]*:[ \\t]*["'']\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["''][ \\t]*\\}?[ \\t]*$|^[ \\t]*\\{[ \\t]*name[ \\t]*:[ \\t]*["'']?\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["'']?[ \\t]*\\}[ \\t]*$)'
     message: |
       Skill frontmatter still carries an unresolved placeholder name
       (e.g. "{skill-name}"). Placeholder templates pollute skill discovery and
@@ -68,3 +68,5 @@ rules:
     paths:
       include:
         - "**/SKILL.md"
+        - "**/skill.json"
+        - "**/*.skill.md"
