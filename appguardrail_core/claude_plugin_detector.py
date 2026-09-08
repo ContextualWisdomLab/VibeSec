@@ -872,8 +872,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_release_command_hits(content))
         hits.extend(_kubectl_apply_command_hits(content))
         hits.extend(_docker_push_command_hits(content))
-        hits.extend(_terraform_apply_command_hits(content))
-        hits.extend(_helm_install_command_hits(content))
+        hits.extend(_terraform_apply_command_hits(content, manifest=manifest))
+        hits.extend(_helm_install_command_hits(content, manifest=manifest))
         hits.extend(_vercel_deploy_command_hits(content, manifest=manifest))
         hits.extend(_fly_deploy_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
@@ -1592,50 +1592,42 @@ def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
-def _terraform_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``terraform apply`` findings with a command label, not vars.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit when ``terraform apply`` is present. ``terraform plan``
-        and README wording are not this class.
-    """
-    match = _TERRAFORM_APPLY_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-terraform-apply-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="terraform apply",
-            message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
-        ),
-    )
+def _terraform_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable terraform apply findings without vars."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-terraform-apply-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="terraform apply",
+                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
-def _helm_install_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``helm install`` findings with a command label, not chart names.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit when ``helm install`` is present. ``helm list`` and
-        ``helm status`` are not this class.
-    """
-    match = _HELM_INSTALL_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-helm-install-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="helm install",
-            message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
-        ),
-    )
+def _helm_install_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable helm install findings without chart names."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-helm-install-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="helm install",
+                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
 def _unquoted_hash_index(line: str) -> int | None:
