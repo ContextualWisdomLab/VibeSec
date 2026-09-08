@@ -115,6 +115,9 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-npm-publish-command` for ``npm publish``,
   `claude-plugin-pypi-upload-command` for ``twine upload``,
   `claude-plugin-cargo-publish-command` for ``cargo publish``,
+  `claude-plugin-pnpm-publish-command` for ``pnpm publish``,
+  `claude-plugin-uv-publish-command` for ``uv publish``,
+  `claude-plugin-poetry-publish-command` for ``poetry publish``,
   and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and

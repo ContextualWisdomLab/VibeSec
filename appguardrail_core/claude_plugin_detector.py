@@ -31,6 +31,8 @@ findings. Hook or manifest ``aws s3 sync``, ``aws s3 cp``, and
 ``az containerapp up`` fail closed as object-store and Container Apps
 writes. Hook or manifest ``npm publish``, ``twine upload``, and
 ``cargo publish`` fail closed as registry-publish command findings.
+Hook or manifest ``pnpm publish``, ``uv publish``, and
+``poetry publish`` fail closed as alternate-manager registry writes.
 Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
@@ -327,6 +329,21 @@ CLAUDE_PLUGIN_CARGO_PUBLISH_COMMAND_MESSAGE: Final = (
     "is write authority on crates.io. Remove the command. "
     "[CWE-269 - Improper Privilege Management]"
 )
+CLAUDE_PLUGIN_PNPM_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs pnpm publish. Publishing a "
+    "package is write authority on the npm registry. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_UV_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs uv publish. Publishing a "
+    "distribution is write authority on PyPI. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
+CLAUDE_PLUGIN_POETRY_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs poetry publish. Publishing a "
+    "distribution is write authority on PyPI. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -470,6 +487,9 @@ _AZ_CONTAINERAPP_UP_COMMAND = re.compile(
 _NPM_PUBLISH_COMMAND = re.compile(r"\bnpm\s+publish\b", re.IGNORECASE)
 _PYPI_UPLOAD_COMMAND = re.compile(r"\btwine\s+upload\b", re.IGNORECASE)
 _CARGO_PUBLISH_COMMAND = re.compile(r"\bcargo\s+publish\b", re.IGNORECASE)
+_PNPM_PUBLISH_COMMAND = re.compile(r"\bpnpm\s+publish\b", re.IGNORECASE)
+_UV_PUBLISH_COMMAND = re.compile(r"\buv\s+publish\b", re.IGNORECASE)
+_POETRY_PUBLISH_COMMAND = re.compile(r"\bpoetry\s+publish\b", re.IGNORECASE)
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _LITERAL_HEREDOC_OPEN = re.compile(
@@ -756,7 +776,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         "package_install",
         re.compile(
             r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
-            r"\b(?:npm\s+publish|twine\s+upload|cargo\s+publish)\b",
+            r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
+            r"uv\s+publish|poetry\s+publish)\b",
             re.IGNORECASE,
         ),
     ),
@@ -979,6 +1000,9 @@ def inspect_claude_plugin_file(
         hits.extend(_npm_publish_command_hits(content, manifest=manifest))
         hits.extend(_pypi_upload_command_hits(content, manifest=manifest))
         hits.extend(_cargo_publish_command_hits(content, manifest=manifest))
+        hits.extend(_pnpm_publish_command_hits(content, manifest=manifest))
+        hits.extend(_uv_publish_command_hits(content, manifest=manifest))
+        hits.extend(_poetry_publish_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2335,6 +2359,91 @@ def _cargo_publish_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="cargo publish",
                 message=CLAUDE_PLUGIN_CARGO_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _pnpm_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``pnpm publish`` findings with a command label, not tokens.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``pnpm publish``. ``npm publish`` and
+        ``yarn npm publish`` stay the npm class. ``pnpm list`` is not
+        this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _PNPM_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-pnpm-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="pnpm publish",
+                message=CLAUDE_PLUGIN_PNPM_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _uv_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``uv publish`` findings with a command label, not tokens.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``uv publish``. ``twine upload`` stays
+        the PyPI class. ``uv pip list`` is not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _UV_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-uv-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="uv publish",
+                message=CLAUDE_PLUGIN_UV_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _poetry_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``poetry publish`` findings with a command label, not names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``poetry publish``. ``twine upload`` stays
+        the PyPI class. Comments and echo lookalikes are not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _POETRY_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-poetry-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="poetry publish",
+                message=CLAUDE_PLUGIN_POETRY_PUBLISH_COMMAND_MESSAGE,
             ),
         )
     return ()
