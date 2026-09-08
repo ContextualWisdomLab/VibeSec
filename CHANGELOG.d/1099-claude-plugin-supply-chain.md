@@ -113,6 +113,12 @@
   Honest small zip/tar of plugin.json and LICENSE, ``../`` path
   traversal, and oversized file-count or byte-count trees stay their
   own classes.
+  Materialized files and zip/tar members whose path exceeds 32
+  components fail as `claude-plugin-excessive-path-depth`. Zip-slip
+  stays `claude-plugin-archive-path-traversal`. Nested archives stay
+  `claude-plugin-decompression-bomb`. Oversized file-count and byte
+  budgets stay `claude-plugin-oversized-package`. Snippets are the
+  label ``nested-path``. Members are not extracted.
   Receipt ``sbom_sha256`` is SHA-256 of a deterministic CycloneDX 1.5
   document from the existing SBOM parsers. It is not a second policy
   digest. Verify fails closed when the digest disagrees. Malformed
