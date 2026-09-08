@@ -169,13 +169,16 @@
   `claude-plugin-conda-upload-command`. ``cabal upload`` and
   ``cabal v2-upload`` fail as `claude-plugin-cabal-upload-command`.
   ``mvn deploy`` fails as `claude-plugin-mvn-deploy-command`.
+  ``gradle publish`` and ``gradlew publish`` fail as
+  `claude-plugin-gradle-publish-command`. ``luarocks upload`` fails as
+  `claude-plugin-luarocks-upload-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
-  ``nuget list``, ``hex info``, ``conda list``, ``cabal list``, and
-  ``mvn package``
+  ``nuget list``, ``hex info``, ``conda list``, ``cabal list``,
+  ``mvn package``, ``gradle tasks``, and ``luarocks list``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

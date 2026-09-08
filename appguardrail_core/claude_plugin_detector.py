@@ -383,6 +383,16 @@ CLAUDE_PLUGIN_MVN_DEPLOY_COMMAND_MESSAGE: Final = (
     "package is write authority on a Maven repository. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_GRADLE_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs gradle publish. Publishing a "
+    "package is write authority on a Maven repository. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_LUAROCKS_UPLOAD_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs luarocks upload. Publishing a "
+    "package is write authority on LuaRocks. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -552,6 +562,14 @@ _CABAL_UPLOAD_COMMAND = re.compile(
 )
 _MVN_DEPLOY_COMMAND = re.compile(
     r"\bmvn\s+deploy\b",
+    re.IGNORECASE,
+)
+_GRADLE_PUBLISH_COMMAND = re.compile(
+    r"\b(?P<cli>gradlew?)\s+publish\b",
+    re.IGNORECASE,
+)
+_LUAROCKS_UPLOAD_COMMAND = re.compile(
+    r"\bluarocks\s+upload\b",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -847,7 +865,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"mix\s+hex\.publish|hex\s+publish|"
             r"(?:conda|anaconda)\s+upload|"
             r"cabal\s+(?:v2-)?upload|"
-            r"mvn\s+deploy)\b",
+            r"mvn\s+deploy|"
+            r"gradlew?\s+publish|"
+            r"luarocks\s+upload)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1080,6 +1100,8 @@ def inspect_claude_plugin_file(
         hits.extend(_conda_upload_command_hits(content, manifest=manifest))
         hits.extend(_cabal_upload_command_hits(content, manifest=manifest))
         hits.extend(_mvn_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_gradle_publish_command_hits(content, manifest=manifest))
+        hits.extend(_luarocks_upload_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2729,6 +2751,64 @@ def _mvn_deploy_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="mvn deploy",
                 message=CLAUDE_PLUGIN_MVN_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _gradle_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``gradle publish`` findings with a command label, not task names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``gradle publish`` or ``gradlew publish``.
+        ``gradle tasks`` and ``gradle publishToMavenLocal`` are not this
+        class. ``mvn deploy`` stays the Maven class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GRADLE_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        snippet = match.group("cli").lower() + " publish"
+        return (
+            PluginHit(
+                rule_id="claude-plugin-gradle-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_GRADLE_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _luarocks_upload_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``luarocks upload`` findings with a command label, not rock names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``luarocks upload``. ``luarocks list`` is
+        not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _LUAROCKS_UPLOAD_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-luarocks-upload-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="luarocks upload",
+                message=CLAUDE_PLUGIN_LUAROCKS_UPLOAD_COMMAND_MESSAGE,
             ),
         )
     return ()

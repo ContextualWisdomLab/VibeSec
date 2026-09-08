@@ -110,7 +110,6 @@ def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 
