@@ -244,3 +244,80 @@ def test_github_write_token_without_merge_stays_the_pat_class(tmp_path: Path) ->
     assert any(hit.rule_id == _WRITE_TOKEN_RULE for hit in hits)
     assert all(hit.rule_id != _MERGE_RULE for hit in hits)
     assert all(hit.rule_id != _RELEASE_RULE for hit in hits)
+
+def _direct_rule_ids(content: str, *, manifest: bool = False) -> set[str]:
+    """Return GitHub-command rule identities for one in-memory surface."""
+    filename = "plugin.json" if manifest else "deploy.sh"
+    path = ".claude-plugin/plugin.json" if manifest else "hooks/deploy.sh"
+    return {
+        hit.rule_id
+        for hit in inspect_claude_plugin_file(filename, path, content)
+        if hit.rule_id in _THIS_CLASS
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_rule"),
+    (
+        ({"command": "gh", "args": ["pr", "merge", "42"]}, _MERGE_RULE),
+        (
+            {"command": "/usr/bin/gh", "args": ["release", "create", "v1"]},
+            _RELEASE_RULE,
+        ),
+        (
+            {"command": "gh.exe", "args": ["release", "upload", "v1", "a"]},
+            _RELEASE_RULE,
+        ),
+    ),
+)
+def test_manifest_typed_argv_detects_github_writes(
+    payload: dict[str, object], expected_rule: str
+) -> None:
+    """Typed argv preserves executable and argument identity."""
+    assert expected_rule in _direct_rule_ids(json.dumps(payload), manifest=True)
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_rule"),
+    (
+        ("sh -c 'gh pr merge 42'", _MERGE_RULE),
+        ("bash -lc 'gh release delete v1 --yes'", _RELEASE_RULE),
+    ),
+)
+def test_nested_shell_payload_detects_github_writes(
+    command: str, expected_rule: str
+) -> None:
+    """A bounded shell -c payload remains executable command text."""
+    assert expected_rule in _direct_rule_ids(command)
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        json.dumps({"description": "gh pr merge is forbidden"}),
+        "echo 'gh release create v1'",
+        "sh -nc 'gh pr merge 42'",
+        "VALUE='gh release edit v1'",
+    ),
+)
+def test_inert_github_text_stays_negative(content: str) -> None:
+    """Descriptions, reporting, assignments, and noexec payloads are inert."""
+    assert _direct_rule_ids(content, manifest=content.startswith("{")) == set()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"command": "gh", "args": ["pr", "merge-now"]},
+        {"command": " gh ", "args": ["pr", "merge"]},
+        {"command": "gh", "args": ["release", "list"]},
+        {"command": "gh", "args": ["release", "createLocal"]},
+        {"command": "gh", "args": "pr merge 42"},
+        {"command": "gh", "args": ["release", 1]},
+    ),
+)
+def test_manifest_typed_argv_near_misses_stay_negative(
+    payload: dict[str, object]
+) -> None:
+    """Malformed types and near verbs do not broaden GitHub write detection."""
+    assert _direct_rule_ids(json.dumps(payload), manifest=True) == set()
