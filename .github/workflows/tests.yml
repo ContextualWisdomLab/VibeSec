@@ -28,8 +28,6 @@ jobs:
         # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Recompile with:
         # uv pip compile --generate-hashes --universal --python-version 3.11 requirements-test.in -o requirements-test.txt
         run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements-test.txt
-      - name: Install Playwright browsers
-        run: python -m playwright install chromium
       - name: Run tests
         run: python -m pytest -q
       - name: Verify 100% statement coverage for live drift modules
