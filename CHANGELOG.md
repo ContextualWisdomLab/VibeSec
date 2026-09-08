@@ -7,6 +7,7 @@
 - 대시보드 검색창 커서 유지 — 검색어 중간에서 텍스트를 수정할 때마다 커서가 검색어의 맨 끝으로 점프하는 불편함을 수정했습니다. 이제 입력창의 커서 위치(`selectionStart`/`selectionEnd`)가 동적 렌더링 이후에도 원래 위치에 정확히 유지되어 자연스러운 타이핑 경험을 제공합니다.
 
 ### 보안
+- Control-plane 대시보드 보안 회귀를 복원했습니다. Concurrent commit이 삭제한 JSON 렌더링 계약을 기존 dashboard security test owner에 통합하고, 숫자 coercion·`data-id` escape·severity own-property 경계와 정확한 innerHTML RCA를 #1192 exact head에 연결했습니다.
 - Claude plugin GitHub 실행 경계 보강 — canonical #1170이 structural manifest의 typed `command`/`args`와 bounded nested-shell payload를 공통 parser로 소비합니다. `gh pr merge`와 `gh release create|upload|delete|edit`는 fail-closed하며 description/reporting/assignment/noexec, malformed argv, near verb, non-write verb는 negative로 유지합니다. 수선은 #1171→#1172→#1173에 non-force로 승계됐습니다.
 - Claude plugin kubectl/Docker 실행 경계 보강 — canonical #1172가 structural manifest의 typed `command`/`args`와 bounded nested-shell payload를 공통 parser로 소비합니다. `kubectl apply`, `docker push`, `docker image push`는 fail-closed하며 description prose, reporting/no-op command, assignment, noexec, near verb, malformed argv는 negative로 유지합니다. #1173은 해당 prerequisite를 non-force로 통합했습니다.
 - Claude plugin 구조화 argv 검출 보강 — JSON manifest의 `command`와 sibling `args`를 하나의 직접 실행 경계로 검증하여 `terraform apply`·`helm install` 우회를 차단합니다. Wrapper/reporting executable, near-verb, 공백 포함 단일 인자, 비배열·혼합형 `args`는 실행으로 추정하지 않으며 기존 shell-string 명령은 그대로 보존합니다.
