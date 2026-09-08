@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from appguardrail_core.claude_plugin_detector import build_claude_plugin_scan_receipt
+from appguardrail_core.claude_plugin_detector import verify_plugin_scan_receipt
 from appguardrail_core.claude_plugin_scan_cli import scan_plugin_artifact
 
 
@@ -150,7 +151,11 @@ def test_receipt_api_fails_closed_on_duplicate_named_catalog_entries(
 ) -> None:
     """Direct receipt admission cannot silently choose one duplicate identity."""
     root = _plugin(tmp_path / "plugin")
-    catalog = _catalog(_canonical_entry(), _canonical_entry())
+    first = _canonical_entry()
+    second = _canonical_entry()
+    first["source"]["ref"] = _PINNED_COMMIT
+    second["source"]["ref"] = _PINNED_COMMIT
+    catalog = _catalog(first, second)
 
     receipt = build_claude_plugin_scan_receipt(
         root,
@@ -160,3 +165,76 @@ def test_receipt_api_fails_closed_on_duplicate_named_catalog_entries(
 
     assert receipt.scan_result == "fail"
     assert "claude-plugin-source-mismatch" in receipt.finding_summary
+
+
+def test_receipt_api_rejects_catalog_payload_that_differs_from_bytes(
+    tmp_path: Path,
+) -> None:
+    """The identity payload cannot be paired with bytes from another catalog."""
+    root = _plugin(tmp_path / "plugin")
+    catalog = _catalog(_canonical_entry())
+    different = _catalog(_canonical_entry("different-plugin"))
+
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=different,
+        catalog_bytes=_catalog_bytes(catalog),
+    )
+
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-source-mismatch" in receipt.finding_summary
+
+
+def test_receipt_api_rejects_duplicate_catalog_json_members(tmp_path: Path) -> None:
+    """Catalog bytes with ambiguous duplicate members fail closed."""
+    root = _plugin(tmp_path / "plugin")
+    catalog = _catalog(_canonical_entry())
+    valid_receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog,
+        catalog_bytes=_catalog_bytes(catalog),
+    )
+    duplicate_bytes = _catalog_bytes(catalog).replace(
+        b'  "plugins": [',
+        b'  "plugins": [],\n  "plugins": [',
+        1,
+    )
+
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_bytes=duplicate_bytes,
+    )
+    verification = verify_plugin_scan_receipt(
+        valid_receipt,
+        root,
+        catalog_bytes=duplicate_bytes,
+    )
+
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-source-mismatch" in receipt.finding_summary
+    assert verification.matches is False
+
+
+def test_receipt_verification_uses_catalog_bytes_as_identity_source(
+    tmp_path: Path,
+) -> None:
+    """Verification rejects a payload that does not match the retained blob."""
+    root = _plugin(tmp_path / "plugin")
+    catalog = _catalog(_canonical_entry())
+    catalog_bytes = _catalog_bytes(catalog)
+    receipt = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog,
+        catalog_bytes=catalog_bytes,
+    )
+
+    verification = verify_plugin_scan_receipt(
+        receipt,
+        root,
+        catalog_payload=_catalog(_canonical_entry("different-plugin")),
+        catalog_bytes=catalog_bytes,
+    )
+
+    assert receipt.scan_result == "pass"
+    assert verification.matches is False
+    assert "scan_receipt_id" in verification.mismatches
