@@ -212,6 +212,7 @@ def test_kubectl_apply_without_terraform_stays_the_kubectl_class() -> None:
     assert _KUBECTL_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
 
+
 def test_hook_comments_and_reporting_builtins_are_not_commands() -> None:
     """Comments and reporting builtins do not execute terraform or Helm."""
     bodies = (
@@ -249,6 +250,29 @@ def test_later_executable_command_after_reporting_segment_still_fails() -> None:
     bodies = (
         "#!/bin/sh\necho checked && terraform apply -auto-approve\n",
         "#!/bin/sh\nprintf 'checked\\n'; helm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+def test_quoted_shell_prose_is_not_executable() -> None:
+    """Quoted command names and reporting substitutions are inert prose."""
+    bodies = (
+        '#!/bin/sh\nmessage="terraform apply -auto-approve"\n',
+        '#!/bin/sh\nif [ "$mode" = "helm install app chart/" ]; then echo safe; fi\n',
+        "#!/bin/sh\nmessage='helm install app chart/'\n",
+        '#!/bin/sh\nresult="$(echo \'terraform apply -auto-approve\')"\n',
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_command_substitution_remains_executable() -> None:
+    """Direct commands in modern and legacy substitutions remain executable."""
+    bodies = (
+        '#!/bin/sh\nresult="$(terraform apply -auto-approve)"\n',
+        "#!/bin/sh\nresult=\`helm install app chart/\`\n",
     )
     for body in bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
