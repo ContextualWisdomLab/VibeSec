@@ -362,9 +362,11 @@ _GITHUB_RELEASE_COMMAND = re.compile(
     r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)\b",
     re.IGNORECASE,
 )
-_KUBECTL_APPLY_COMMAND = re.compile(r"\bkubectl\s+apply\b", re.IGNORECASE)
+_KUBECTL_APPLY_COMMAND = re.compile(
+    r"\bkubectl\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _DOCKER_PUSH_COMMAND = re.compile(
-    r"\bdocker(?:\s+image)?\s+push\b",
+    r"\bdocker(?:\s+image)?\s+push(?=$|[\s;&|()<>])",
     re.IGNORECASE,
 )
 _TERRAFORM_APPLY_COMMAND = re.compile(
@@ -884,8 +886,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_write_token_hits(content))
         hits.extend(_github_merge_command_hits(content))
         hits.extend(_github_release_command_hits(content))
-        hits.extend(_kubectl_apply_command_hits(content))
-        hits.extend(_docker_push_command_hits(content))
+        hits.extend(_kubectl_apply_command_hits(content, manifest=manifest))
+        hits.extend(_docker_push_command_hits(content, manifest=manifest))
         hits.extend(_terraform_apply_command_hits(content, manifest=manifest))
         hits.extend(_helm_install_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
@@ -1558,51 +1560,92 @@ def _github_release_command_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
-def _kubectl_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``kubectl apply`` findings with a command label, not manifests.
+def _kubectl_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable kubectl apply findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        line = _manifest_argv_command_line(
+            content, executable="kubectl", verb="apply"
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=line,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit when ``kubectl apply`` is present. ``kubectl get`` and
-        README wording are not this class.
-    """
-    match = _KUBECTL_APPLY_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-kubectl-apply-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="kubectl apply",
-            message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
-        ),
-    )
-
-
-def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``docker push`` findings with a command label, not image names.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for ``docker push`` or ``docker image push``.
-        ``docker ps``, ``docker pull``, and socket binds are not this class.
-    """
-    match = _DOCKER_PUSH_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-docker-push-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="docker push",
-            message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
-        ),
-    )
-
+def _docker_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable Docker push findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            if _direct_executable_basename(command) != "docker":
+                continue
+            folded = tuple(argument.casefold() for argument in args)
+            if folded[:1] == ("push",) or folded[:2] == ("image", "push"):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-docker-push-command",
+                        line=line,
+                        snippet="docker push",
+                        message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
 def _unquoted_hash_index(line: str) -> int | None:
     """Return the index of an unquoted ``#`` shell comment, if any.
