@@ -112,7 +112,7 @@ function scrollDetailIntoView(element){
   }
 }
 
-function count(n){const v=parseInt(n,10);return Number.isSafeInteger(v)&&v>=0?v:0;}
+function count(n){const v=Number(n);return Number.isSafeInteger(v)&&v>=0?v:0;}
 async function load(){
   try{
     const {scans}=await api("/api/v1/scans");
