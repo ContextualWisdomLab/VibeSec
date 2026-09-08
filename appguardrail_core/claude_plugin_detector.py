@@ -58,6 +58,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import tarfile
 from typing import Final, Iterable
@@ -331,10 +332,40 @@ _PIPE_TO_SHELL = re.compile(
 _GITHUB_TOKEN = re.compile(
     r"\b(?P<prefix>ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}\b"
 )
-_GITHUB_MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b", re.IGNORECASE)
+_GITHUB_MERGE_COMMAND = re.compile(
+    r"\bgh\s+pr\s+merge(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _GITHUB_RELEASE_COMMAND = re.compile(
-    r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)\b",
+    r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)"
+    r"(?=$|[\s;&|()<>])",
     re.IGNORECASE,
+)
+_REPORTING_BUILTINS: Final = frozenset(
+    {":", "echo", "false", "print", "printf", "true"}
+)
+_SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
+_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efilsuvx")
+_BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("abhkmprtBCEHPT")
+_BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
+    {
+        "--debug",
+        "--debugger",
+        "--login",
+        "--noediting",
+        "--noprofile",
+        "--norc",
+        "--posix",
+        "--pretty-print",
+        "--restricted",
+        "--verbose",
+    }
+)
+_SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
+_LITERAL_HEREDOC_OPEN = re.compile(
+    r"<<(?P<strip>-)?[ \t]*(?P<quote>['\"]?)"
+    r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
+    r"(?=$|[ \t;&|()<>])"
 )
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
@@ -818,8 +849,8 @@ def inspect_claude_plugin_file(
         hits.extend(_package_lifecycle_hits(content))
     if manifest or hook_surface:
         hits.extend(_github_write_token_hits(content))
-        hits.extend(_github_merge_command_hits(content))
-        hits.extend(_github_release_command_hits(content))
+        hits.extend(_github_merge_command_hits(content, manifest=manifest))
+        hits.extend(_github_release_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1443,52 +1474,585 @@ def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
-def _github_merge_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``gh pr merge`` findings with a command label, not tokens.
+def _unquoted_hash_index(line: str) -> int | None:
+    """Return the index of an unquoted ``#`` shell comment, if any.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        The comment index, or ``None`` when every ``#`` is quoted or escaped.
+    """
+    in_single = False
+    in_double = False
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if char == "#" and not in_single and not in_double:
+            return index
+    return None
+
+
+def _iter_unquoted_segment_bounds(line: str) -> tuple[tuple[int, int], ...]:
+    """Return start/end offsets of unquoted shell command segments.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        Inclusive-start exclusive-end spans split on unquoted ``&&``,
+        ``||``, ``;``, ``|``, and ``&``. Quoted lookalikes stay one span.
+    """
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    in_single = False
+    in_double = False
+    escaped = False
+    length = len(line)
+    index = 0
+    while index < length:
+        char = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            index += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            index += 1
+            continue
+        if in_single or in_double:
+            index += 1
+            continue
+        two = line[index : index + 2]
+        if two in {"&&", "||"}:
+            bounds.append((start, index))
+            start = index + 2
+            index += 2
+            continue
+        if char in {";", "|", "&"}:
+            bounds.append((start, index))
+            start = index + 1
+            index += 1
+            continue
+        index += 1
+    bounds.append((start, length))
+    return tuple(bounds)
+
+
+def _first_shell_token(segment: str) -> str:
+    """Return the first command basename of a shell segment.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        A lowercase basename such as ``echo``. Empty when the fragment
+        has no command token.
+    """
+    match = _FIRST_SHELL_TOKEN.match(segment)
+    if match is None:
+        return ""
+    name = match.group(1).rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name.lower()
+
+
+def _is_reporting_builtin_segment(segment: str) -> bool:
+    """Return whether the command does not execute its argument text.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        ``True`` for no-op, status, and reporting commands, including path
+        and ``.exe`` spellings.
+    """
+    return _first_shell_token(segment) in _REPORTING_BUILTINS
+
+
+def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
+    """Return structural manifest command strings with source line numbers."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return ()
+
+    found: list[tuple[str, int]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key == "command" and isinstance(nested, str) and nested.strip():
+                    found.append((nested, _script_line(content, nested)))
+                else:
+                    collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return tuple(found)
+
+
+def _direct_executable_basename(command: str) -> str:
+    """Return a direct executable basename without changing token identity."""
+    if not command or command != command.strip():
+        return ""
+    name = command.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _manifest_argv_sources(
+    content: str,
+) -> tuple[tuple[str, tuple[str, ...], int], ...]:
+    """Return typed direct-argv records from structural manifest objects."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return ()
+
+    found: list[tuple[str, tuple[str, ...], int]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            command = value.get("command")
+            args = value.get("args")
+            if (
+                isinstance(command, str)
+                and command
+                and isinstance(args, list)
+                and all(isinstance(argument, str) for argument in args)
+            ):
+                found.append((command, tuple(args), _script_line(content, command)))
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return tuple(found)
+
+
+def _manifest_argv_command_line(
+    content: str,
+    *,
+    executable: str,
+    verb: str,
+    leading_value_option: str | None = None,
+) -> int | None:
+    """Return the source line for one direct structural manifest argv command.
+
+    Args:
+        content: Parsed-manifest source text.
+        executable: Exact executable basename without an .exe suffix.
+        verb: Exact write verb expected in argv.
+        leading_value_option: Optional single name=value global option
+            allowed before the verb.
+
+    Returns:
+        The one-based command source line, or None when identity, argv
+        types, option grammar, or verb boundaries do not match.
+    """
+    for command, args, line in _manifest_argv_sources(content):
+        command_name = _direct_executable_basename(command)
+        verb_index = 0
+        if (
+            leading_value_option is not None
+            and args
+            and args[0].casefold().startswith(leading_value_option)
+            and len(args[0]) > len(leading_value_option)
+        ):
+            verb_index = 1
+        if (
+            command_name == executable
+            and verb_index < len(args)
+            and args[verb_index].casefold() == verb
+        ):
+            return line
+    return None
+
+
+def _hosted_command_sources(
+    content: str, *, manifest: bool
+) -> tuple[tuple[str, int], ...]:
+    """Return shell text sources for one hook or structural manifest."""
+    if manifest:
+        return _manifest_command_sources(content)
+    return ((content, 1),)
+
+
+def _shell_command_context_start(line: str, offset: int) -> int | None:
+    """Return the executable shell-frame start containing ``offset``.
+
+    Args:
+        line: One hook or manifest command line.
+        offset: Zero-based match offset within ``line``.
+
+    Returns:
+        The start of the root, ``$(...)``, or backtick command frame.
+        ``None`` means the offset is inert single- or double-quoted prose.
+    """
+    frames: list[tuple[str, int, str, int]] = [("", 0, "", 0)]
+    escaped = False
+    index = 0
+    while index < offset:
+        frame_end, frame_start, quote, depth = frames[-1]
+        char = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and quote != '"':
+            frames[-1] = (frame_end, frame_start, "" if quote == "'" else "'", depth)
+            index += 1
+            continue
+        if char == '"' and quote != "'":
+            frames[-1] = (frame_end, frame_start, "" if quote == '"' else '"', depth)
+            index += 1
+            continue
+        if quote != "'" and line[index : index + 2] == "$(":
+            frames.append((")", index + 2, "", 1))
+            index += 2
+            continue
+        if quote != "'" and char == "`":
+            if frame_end == "`":
+                frames.pop()
+            else:
+                frames.append(("`", index + 1, "", 0))
+            index += 1
+            continue
+        if quote:
+            index += 1
+            continue
+        if frame_end == ")" and char == "(":
+            frames[-1] = (frame_end, frame_start, quote, depth + 1)
+        elif frame_end == ")" and char == ")":
+            if depth == 1:
+                frames.pop()
+            else:
+                frames[-1] = (frame_end, frame_start, quote, depth - 1)
+        index += 1
+    _frame_end, frame_start, quote, _depth = frames[-1]
+    return None if quote else frame_start
+
+
+def _literal_heredoc_payload_spans(content: str) -> tuple[tuple[int, int], ...]:
+    """Return closed literal here-document payload spans.
+
+    Args:
+        content: One hook or structural manifest command string.
+
+    Returns:
+        Inclusive-start exclusive-end spans for payloads with one confidently
+        parsed identifier delimiter on the opener line. Quoted delimiters and
+        tab-stripping forms are supported. Ambiguous or unclosed forms stay
+        executable for fail-closed analysis.
+    """
+    spans: list[tuple[int, int]] = []
+    active: tuple[str, bool, int] | None = None
+    offset = 0
+    for raw_line in content.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        if active is not None:
+            delimiter, strip_tabs, payload_start = active
+            candidate = line.lstrip("\t") if strip_tabs else line
+            if candidate == delimiter:
+                spans.append((payload_start, offset))
+                active = None
+            offset += len(raw_line)
+            continue
+
+        comment_at = _unquoted_hash_index(line)
+        openers = tuple(
+            match
+            for match in _LITERAL_HEREDOC_OPEN.finditer(line)
+            if (comment_at is None or match.start() < comment_at)
+            and _shell_command_context_start(line, match.start()) is not None
+        )
+        if len(openers) == 1:
+            opener = openers[0]
+            active = (
+                opener.group("delimiter"),
+                opener.group("strip") is not None,
+                offset + len(raw_line),
+            )
+        offset += len(raw_line)
+    return tuple(spans)
+
+
+def _match_starts_in_shell_assignment_value(segment: str, offset: int) -> bool:
+    """Return whether ``offset`` starts inside an unquoted assignment word.
+
+    Args:
+        segment: One shell command segment.
+        offset: Zero-based match offset within ``segment``.
+
+    Returns:
+        True when the current shell word before ``offset`` contains ``=``.
+        An assignment followed by whitespace and a real command returns False.
+    """
+    prefix = segment[:offset]
+    if not prefix or prefix[-1].isspace():
+        return False
+    return "=" in prefix.rsplit(maxsplit=1)[-1]
+
+
+def _executable_command_match(    content: str, pattern: re.Pattern[str]
+) -> re.Match[str] | None:
+    """Return the first regex match that is an executable command context.
+
+    Unquoted ``#`` comments, quoted prose, closed literal here-document
+    payloads, shell assignment values, and ``echo``/``printf``/``print``
+    segments are not executable. Direct
+    commands inside ``$(...)`` or backticks remain executable.
 
     Args:
         content: Hook or manifest text.
+        pattern: Compiled command regex.
 
     Returns:
-        One hit when the merge CLI is present. Empty when the text only
-        lists, views, or reviews pull requests.
+        The first executable match, or ``None``.
     """
-    match = _GITHUB_MERGE_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-github-merge-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="gh pr merge",
-            message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
-        ),
-    )
+    if not content:
+        return None
+    inert_payloads = _literal_heredoc_payload_spans(content)
+    for match in pattern.finditer(content):
+        if any(start <= match.start() < end for start, end in inert_payloads):
+            continue
+        line_start = content.rfind("\n", 0, match.start()) + 1
+        line_end = content.find("\n", match.start())
+        if line_end < 0:
+            line_end = len(content)
+        line = content[line_start:line_end]
+        relative = match.start() - line_start
+        context_start = _shell_command_context_start(line, relative)
+        if context_start is None:
+            continue
+        context = line[context_start:]
+        context_relative = relative - context_start
+        comment_at = _unquoted_hash_index(context)
+        if comment_at is not None and context_relative >= comment_at:
+            continue
+        for segment_start, segment_end in _iter_unquoted_segment_bounds(context):
+            if segment_start <= context_relative < segment_end:
+                segment = context[segment_start:segment_end]
+                segment_relative = context_relative - segment_start
+                if not _is_reporting_builtin_segment(
+                    segment
+                ) and not _match_starts_in_shell_assignment_value(
+                    segment, segment_relative
+                ):
+                    return match
+                break
+    return None
 
 
-def _github_release_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return GitHub CLI release write-verb findings without secret bodies.
+def _shell_payload_index(
+    arguments: tuple[str, ...] | list[str], *, shell_name: str
+) -> int | None:
+    """Return the payload index after bounded executable shell options."""
+    seen_short_option = False
+    for index, token in enumerate(arguments):
+        if shell_name == "bash" and token in _BASH_NO_VALUE_LONG_OPTIONS:
+            if seen_short_option:
+                return None
+            continue
+        if not token.startswith("-") or token.startswith("--"):
+            return None
+        seen_short_option = True
+        flags = token[1:]
+        allowed_flags = _SHELL_NO_VALUE_SHORT_OPTIONS
+        if shell_name == "bash":
+            allowed_flags |= _BASH_NO_VALUE_SHORT_OPTIONS
+        if not flags or any(
+            flag not in allowed_flags and flag not in {"c", "n"}
+            for flag in flags
+        ):
+            return None
+        if "n" in flags:
+            return None
+        if "c" in flags:
+            payload_index = index + 1
+            return payload_index if payload_index < len(arguments) else None
+    return None
 
-    Args:
-        content: Hook or manifest text.
 
-    Returns:
-        One hit for ``create``, ``upload``, ``delete``, or ``edit``.
-        ``gh release list`` and ``gh release view`` are not this class.
-    """
-    match = _GITHUB_RELEASE_COMMAND.search(content)
-    if match is None:
-        return ()
-    verb = match.group("verb").lower()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-github-release-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet=f"gh release {verb}",
-            message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
-        ),
-    )
+def _nested_shell_payload_sources(
+    content: str, *, manifest: bool
+) -> tuple[tuple[str, int], ...]:
+    """Return bounded direct shell -c payloads with their source line."""
+    found: list[tuple[str, int]] = []
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        inert_payloads = _literal_heredoc_payload_spans(source)
+        source_offset = 0
+        for line_index, raw_line in enumerate(source.splitlines(keepends=True)):
+            line = raw_line.rstrip("\r\n")
+            comment_at = _unquoted_hash_index(line)
+            executable_line = line if comment_at is None else line[:comment_at]
+            for segment_start, segment_end in _iter_unquoted_segment_bounds(
+                executable_line
+            ):
+                absolute_start = source_offset + segment_start
+                if any(
+                    start <= absolute_start < end for start, end in inert_payloads
+                ):
+                    continue
+                segment = executable_line[segment_start:segment_end]
+                try:
+                    tokens = shlex.split(segment, comments=False, posix=True)
+                except ValueError:
+                    continue
+                token_index = 0
+                while (
+                    token_index < len(tokens)
+                    and _SHELL_ASSIGNMENT_PREFIX.match(tokens[token_index])
+                ):
+                    token_index += 1
+                if token_index >= len(tokens):
+                    continue
+                shell_name = _direct_executable_basename(tokens[token_index])
+                if shell_name not in _SHELL_COMMAND_INTERPRETERS:
+                    continue
+                shell_arguments = tokens[token_index + 1 :]
+                payload_index = _shell_payload_index(
+                    shell_arguments, shell_name=shell_name
+                )
+                if payload_index is None:
+                    continue
+                payload = shell_arguments[payload_index]
+                if payload:
+                    found.append((payload, first_line + line_index))
+            source_offset += len(raw_line)
 
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            shell_name = _direct_executable_basename(command)
+            if shell_name not in _SHELL_COMMAND_INTERPRETERS:
+                continue
+            payload_index = _shell_payload_index(args, shell_name=shell_name)
+            if payload_index is not None and args[payload_index]:
+                found.append((args[payload_index], line))
+    return tuple(found)
+
+
+def _github_merge_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub merge findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and folded[:2] == ("pr", "merge")
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-merge-command",
+                        line=line,
+                        snippet="gh pr merge",
+                        message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
+def _github_release_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub release findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and len(folded) >= 2
+                and folded[0] == "release"
+                and folded[1] in {"create", "upload", "delete", "edit"}
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-release-command",
+                        line=line,
+                        snippet=f"gh release {folded[1]}",
+                        message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
 def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
     """Return findings for eval/exec/compile/Function on hook surfaces."""
