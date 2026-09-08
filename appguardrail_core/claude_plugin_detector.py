@@ -584,7 +584,7 @@ _LUAROCKS_UPLOAD_COMMAND = re.compile(
 )
 _SBT_PUBLISH_COMMAND = re.compile(
     r"\bsbt[ \t]+(?P<quote>['\"]?)(?P<verb>publish(?:Signed)?)(?P=quote)"
-    r"(?=$|[ \t;&|])",
+    r"(?=$|[ \t;&|)`])",
     re.IGNORECASE,
 )
 _CONAN_UPLOAD_COMMAND = re.compile(
