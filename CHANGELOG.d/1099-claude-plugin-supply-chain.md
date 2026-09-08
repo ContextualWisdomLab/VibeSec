@@ -163,13 +163,16 @@
   `claude-plugin-gem-push-command`. ``nuget push`` and
   ``dotnet nuget push`` fail as `claude-plugin-nuget-push-command`.
   ``dart pub publish``, ``flutter pub publish``, and ``pub publish``
-  fail as `claude-plugin-pub-publish-command`.
+  fail as `claude-plugin-pub-publish-command`. ``hex publish`` and
+  ``mix hex.publish`` fail as `claude-plugin-hex-publish-command`.
+  ``conda upload`` and ``anaconda upload`` fail as
+  `claude-plugin-conda-upload-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
-  and ``nuget list``
+  ``nuget list``, ``hex info``, and ``conda list``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

@@ -121,6 +121,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-gem-push-command` for ``gem push``,
   `claude-plugin-nuget-push-command` for ``nuget push``,
   `claude-plugin-pub-publish-command` for ``dart pub publish``,
+  `claude-plugin-hex-publish-command` for ``hex publish``,
+  `claude-plugin-conda-upload-command` for ``conda upload``,
   and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
@@ -130,7 +132,7 @@ files being scanned, then applies the union of relevant checks. Examples:
   ``kubectl get``, ``docker ps``, ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
   ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
-  and ``nuget list`` stay inventory.
+  ``nuget list``, ``hex info``, and ``conda list`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
