@@ -21,14 +21,17 @@ finding. Capability inventory is evidence,
 not permission, except that hook or manifest ``gh pr merge`` and
 ``gh release create|upload|delete|edit`` fail closed as command findings.
 Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
-deployment-write command findings. Hook or manifest paths into
+deployment-write command findings. Hook or manifest ``terraform apply``
+and ``helm install`` fail closed as infra-write command findings.
+``terraform plan``, ``helm list``, ``vercel deploy``, and ``fly deploy``
+stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 ``~/.ssh/id_*`` private keys fail closed as credential-store findings.
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
-``terraform apply``, and ``helm install`` stay inventory. Skill
+``terraform plan``, and ``helm list`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -232,6 +235,16 @@ CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE: Final = (
     "write authority on a registry. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs terraform apply. Applying "
+    "infrastructure is write authority. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs helm install. Installing a chart "
+    "is write authority on a cluster. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -353,6 +366,8 @@ _DOCKER_PUSH_COMMAND = re.compile(
     r"\bdocker(?:\s+image)?\s+push\b",
     re.IGNORECASE,
 )
+_TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
+_HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
     re.IGNORECASE,
@@ -839,6 +854,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_release_command_hits(content))
         hits.extend(_kubectl_apply_command_hits(content))
         hits.extend(_docker_push_command_hits(content))
+        hits.extend(_terraform_apply_command_hits(content))
+        hits.extend(_helm_install_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1551,6 +1568,52 @@ def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet="docker push",
             message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _terraform_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``terraform apply`` findings with a command label, not vars.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit when ``terraform apply`` is present. ``terraform plan``
+        and README wording are not this class.
+    """
+    match = _TERRAFORM_APPLY_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-terraform-apply-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="terraform apply",
+            message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _helm_install_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``helm install`` findings with a command label, not chart names.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit when ``helm install`` is present. ``helm list`` and
+        ``helm status`` are not this class.
+    """
+    match = _HELM_INSTALL_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-helm-install-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="helm install",
+            message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
         ),
     )
 

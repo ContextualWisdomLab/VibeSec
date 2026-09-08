@@ -77,7 +77,9 @@ jobs:
             --test tests/test_claude_plugin_sbom_receipt.py \
             --test tests/test_claude_plugin_checksum_mismatch.py \
             --test tests/test_claude_plugin_github_merge_release.py \
-            --test tests/test_claude_plugin_credential_store.py
+            --test tests/test_claude_plugin_credential_store.py \
+            --test tests/test_claude_plugin_deployment_write.py \
+            --test tests/test_claude_plugin_terraform_helm.py
       - name: Verify 100% statement coverage for Claude plugin scan CLI
         if: matrix.python-version == '3.13'
         run: |

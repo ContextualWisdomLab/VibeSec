@@ -132,7 +132,10 @@
   ``docker push`` and ``docker image push`` fail as
   `claude-plugin-docker-push-command`. ``gh issue create``,
   ``gh pr review``, ``gh release list``, ``kubectl get``, ``docker ps``,
-  ``terraform apply``, and ``helm install`` stay inventory. Hardcoded
+  ``terraform apply`` fails as `claude-plugin-terraform-apply-command`.
+  ``helm install`` fails as `claude-plugin-helm-install-command`.
+  ``terraform plan``, ``helm list``, ``vercel deploy``, and ``fly deploy``
+  stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.
   Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
