@@ -132,6 +132,7 @@ function safeUrl(u){
 
 let ALL = null;
 let filterSev = '', query = '';
+let filterBlocking = false;
 let lastFocus = null;
 
 function render(){
@@ -194,6 +195,7 @@ function render(){
   const filtered = ALL
     .map((f,i)=>({f,i}))
     .filter(({f})=> (!filterSev || String(f.severity).toUpperCase()===filterSev))
+    .filter(({f})=> (!filterBlocking || isDeployBlocking(f)))
     .filter(({f})=> !query || (String(f.message)+' '+String(f.file)+' '+String(f.rule_id)+' '+String(f.category)).toLowerCase().includes(query))
     .sort((a,b)=> SEV_ORDER.indexOf(String(a.f.severity).toUpperCase()) - SEV_ORDER.indexOf(String(b.f.severity).toUpperCase()));
   const allFindingsText = formatFindingCount(ALL.length);
@@ -219,7 +221,7 @@ function render(){
     <h1>Dashboard</h1>
     <p class="sub">${findingsText} · <strong>${blocking}</strong> deploy-blocking (gate ${blocking?'active':'clear'})</p>
     <div class="cards">${cards}
-      <div class="card"><div class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</div><div class="n">${blocking}</div></div>
+      <div class="card" role="button" tabindex="0" aria-label="Toggle Deploy-blocking filter" aria-pressed="${filterBlocking}" onclick="filterBlocking=!filterBlocking; render();" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); this.click();}" style="cursor:pointer; ${filterBlocking ? 'border-color:var(--primary); box-shadow:0 0 0 1px var(--primary);' : ''}"><div class="lbl"><span class="dot" style="background:var(--primary)"></span>Deploy-blocking</div><div class="n">${blocking}</div></div>
     </div>
     <div class="grid2">
       <div class="panel"><h2>Findings by category</h2><div class="rowlist">${catRows||'<div class="r">—</div>'}</div></div>
@@ -235,7 +237,7 @@ function render(){
           <thead><tr><th scope="col">Severity</th><th scope="col">Finding</th><th scope="col">File</th><th scope="col">Category</th><th scope="col">Status</th></tr></thead>
           <tbody>${rows||`<tr><td colspan="5" style="padding:32px 24px;text-align:center">
           <div style="color:var(--text);font-weight:600;font-size:14px;margin-bottom:8px">No findings match the filter</div>
-          <button type="button" aria-label="Clear filters" onclick="query=''; filterSev=''; render(); document.getElementById('q')?.focus();" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font:inherit;color:var(--text);font-weight:500;transition:background 0.2s">Clear filters</button>
+          <button type="button" aria-label="Clear filters" onclick="query=''; filterSev=''; filterBlocking=false; render(); document.getElementById('q')?.focus();" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font:inherit;color:var(--text);font-weight:500;transition:background 0.2s">Clear filters</button>
         </td></tr>`}</tbody>
         </table></div>
       </div>
