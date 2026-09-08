@@ -152,12 +152,15 @@
   ``az webapp deploy`` fails as `claude-plugin-az-deploy-command`.
   ``aws s3 sync`` and ``aws s3 cp`` fail as
   `claude-plugin-aws-s3-write-command`. ``az containerapp up`` fails as
-  `claude-plugin-az-containerapp-up-command`.
+  `claude-plugin-az-containerapp-up-command`. ``npm publish`` fails as
+  `claude-plugin-npm-publish-command`. ``twine upload`` fails as
+  `claude-plugin-pypi-upload-command`. ``cargo publish`` fails as
+  `claude-plugin-cargo-publish-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
-  and ``az account show``
+  ``az account show``, ``npm pack``, and ``cargo check``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

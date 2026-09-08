@@ -29,10 +29,13 @@ deploy``, ``aws deploy create-deployment``, ``gcloud run|app|functions
 deploy``, and ``az webapp deploy`` fail closed as cloud-deploy command
 findings. Hook or manifest ``aws s3 sync``, ``aws s3 cp``, and
 ``az containerapp up`` fail closed as object-store and Container Apps
-writes. Unquoted ``#`` comments and
+writes. Hook or manifest ``npm publish``, ``twine upload``, and
+``cargo publish`` fail closed as registry-publish command findings.
+Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
-``aws s3 ls``, ``gcloud config list``, and ``az account show``
+``aws s3 ls``, ``gcloud config list``, ``az account show``,
+``npm pack``, and ``cargo check``
 stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
@@ -41,7 +44,8 @@ Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
-``aws s3 ls``, ``gcloud config list``, and ``az account show``
+``aws s3 ls``, ``gcloud config list``, ``az account show``,
+``npm pack``, and ``cargo check``
 stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
@@ -308,6 +312,21 @@ CLAUDE_PLUGIN_AZ_CONTAINERAPP_UP_COMMAND_MESSAGE: Final = (
     "a Container Apps revision is write authority. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_NPM_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs npm publish. Publishing a package "
+    "is write authority on the npm registry. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_PYPI_UPLOAD_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs twine upload. Uploading a "
+    "distribution is write authority on PyPI. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
+CLAUDE_PLUGIN_CARGO_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs cargo publish. Publishing a crate "
+    "is write authority on crates.io. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -448,6 +467,9 @@ _AZ_CONTAINERAPP_UP_COMMAND = re.compile(
     r"\baz\s+containerapp\s+up\b",
     re.IGNORECASE,
 )
+_NPM_PUBLISH_COMMAND = re.compile(r"\bnpm\s+publish\b", re.IGNORECASE)
+_PYPI_UPLOAD_COMMAND = re.compile(r"\btwine\s+upload\b", re.IGNORECASE)
+_CARGO_PUBLISH_COMMAND = re.compile(r"\bcargo\s+publish\b", re.IGNORECASE)
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
@@ -728,7 +750,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
     (
         "package_install",
         re.compile(
-            r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b",
+            r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
+            r"\b(?:npm\s+publish|twine\s+upload|cargo\s+publish)\b",
             re.IGNORECASE,
         ),
     ),
@@ -948,6 +971,9 @@ def inspect_claude_plugin_file(
         hits.extend(_az_deploy_command_hits(content, manifest=manifest))
         hits.extend(_aws_s3_write_command_hits(content, manifest=manifest))
         hits.extend(_az_containerapp_up_command_hits(content, manifest=manifest))
+        hits.extend(_npm_publish_command_hits(content, manifest=manifest))
+        hits.extend(_pypi_upload_command_hits(content, manifest=manifest))
+        hits.extend(_cargo_publish_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2072,6 +2098,90 @@ def _az_containerapp_up_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="az containerapp up",
                 message=CLAUDE_PLUGIN_AZ_CONTAINERAPP_UP_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _npm_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``npm publish`` findings with a command label, not tokens.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``npm publish``. ``npm pack``, comments,
+        and echo lookalikes are not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _NPM_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-npm-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="npm publish",
+                message=CLAUDE_PLUGIN_NPM_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _pypi_upload_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``twine upload`` findings with a command label, not filenames.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``twine upload``. ``pip install`` is not
+        this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _PYPI_UPLOAD_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-pypi-upload-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="twine upload",
+                message=CLAUDE_PLUGIN_PYPI_UPLOAD_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _cargo_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``cargo publish`` findings with a command label, not crate names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``cargo publish``. ``cargo check`` is not
+        this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _CARGO_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-cargo-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="cargo publish",
+                message=CLAUDE_PLUGIN_CARGO_PUBLISH_COMMAND_MESSAGE,
             ),
         )
     return ()
