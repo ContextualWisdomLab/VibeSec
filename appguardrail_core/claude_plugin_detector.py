@@ -923,11 +923,11 @@ def inspect_claude_plugin_file(
         hits.extend(_docker_push_command_hits(content))
         hits.extend(_terraform_apply_command_hits(content))
         hits.extend(_helm_install_command_hits(content))
-        hits.extend(_vercel_deploy_command_hits(content))
-        hits.extend(_fly_deploy_command_hits(content))
-        hits.extend(_aws_deploy_command_hits(content))
-        hits.extend(_gcloud_deploy_command_hits(content))
-        hits.extend(_az_deploy_command_hits(content))
+        hits.extend(_vercel_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_fly_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_aws_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_gcloud_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_az_deploy_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1815,6 +1815,39 @@ def _is_reporting_builtin_segment(segment: str) -> bool:
     return _first_shell_token(segment) in _REPORTING_BUILTINS
 
 
+def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
+    """Return structural manifest command strings with source line numbers."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return ()
+
+    found: list[tuple[str, int]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key == "command" and isinstance(nested, str) and nested.strip():
+                    found.append((nested, _script_line(content, nested)))
+                else:
+                    collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return tuple(found)
+
+
+def _hosted_command_sources(
+    content: str, *, manifest: bool
+) -> tuple[tuple[str, int], ...]:
+    """Return shell text sources for one hook or structural manifest."""
+    if manifest:
+        return _manifest_command_sources(content)
+    return ((content, 1),)
+
+
 def _executable_command_match(
     content: str, pattern: re.Pattern[str]
 ) -> re.Match[str] | None:
@@ -1851,7 +1884,9 @@ def _executable_command_match(
     return None
 
 
-def _vercel_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+def _vercel_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
     """Return ``vercel deploy`` findings with a command label, not tokens.
 
     Args:
@@ -1862,20 +1897,24 @@ def _vercel_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
         ``vercel ls``, README wording, hook comments, and echo/printf
         lookalikes are not this class.
     """
-    match = _executable_command_match(content, _VERCEL_DEPLOY_COMMAND)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-vercel-deploy-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="vercel deploy",
-            message=CLAUDE_PLUGIN_VERCEL_DEPLOY_COMMAND_MESSAGE,
-        ),
-    )
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _VERCEL_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-vercel-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="vercel deploy",
+                message=CLAUDE_PLUGIN_VERCEL_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
-def _fly_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+def _fly_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
     """Return ``fly deploy`` findings with a command label, not app names.
 
     Args:
@@ -1886,90 +1925,78 @@ def _fly_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
         ``fly status``, hook comments, and echo/printf lookalikes are
         not this class.
     """
-    match = _executable_command_match(content, _FLY_DEPLOY_COMMAND)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-fly-deploy-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="fly deploy",
-            message=CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE,
-        ),
-    )
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _FLY_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-fly-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="fly deploy",
+                message=CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
-def _aws_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return AWS deploy-write findings with a command label, not secrets.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for executable ``aws cloudformation deploy`` or
-        ``aws deploy create-deployment``. ``aws s3 ls`` and echo
-        lookalikes are not this class.
-    """
-    match = _executable_command_match(content, _AWS_DEPLOY_COMMAND)
-    if match is None:
-        return ()
-    token = match.group(0).lower()
-    snippet = " ".join(token.split())
-    return (
-        PluginHit(
-            rule_id="claude-plugin-aws-deploy-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet=snippet,
-            message=CLAUDE_PLUGIN_AWS_DEPLOY_COMMAND_MESSAGE,
-        ),
-    )
+def _aws_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return AWS deploy-write findings with a command label, not secrets."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _AWS_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        snippet = " ".join(match.group(0).lower().split())
+        return (
+            PluginHit(
+                rule_id="claude-plugin-aws-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_AWS_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
-def _gcloud_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return gcloud deploy findings with a service-qualified command label.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for executable ``gcloud run|app|functions deploy``.
-        ``gcloud config list`` is not this class.
-    """
-    match = _executable_command_match(content, _GCLOUD_DEPLOY_COMMAND)
-    if match is None:
-        return ()
-    service = match.group("service").lower()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-gcloud-deploy-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet=f"gcloud {service} deploy",
-            message=CLAUDE_PLUGIN_GCLOUD_DEPLOY_COMMAND_MESSAGE,
-        ),
-    )
+def _gcloud_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return gcloud deploy findings with a service-qualified command label."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GCLOUD_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        service = match.group("service").lower()
+        return (
+            PluginHit(
+                rule_id="claude-plugin-gcloud-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="gcloud " + service + " deploy",
+                message=CLAUDE_PLUGIN_GCLOUD_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
-def _az_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return Azure webapp deploy findings with a command label, not names.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for executable ``az webapp deploy``. ``az account show``
-        is not this class.
-    """
-    match = _executable_command_match(content, _AZ_DEPLOY_COMMAND)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-az-deploy-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="az webapp deploy",
-            message=CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE,
-        ),
-    )
+def _az_deploy_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return Azure webapp deploy findings with a command label, not names."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _AZ_DEPLOY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-az-deploy-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="az webapp deploy",
+                message=CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
 
 
 def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
