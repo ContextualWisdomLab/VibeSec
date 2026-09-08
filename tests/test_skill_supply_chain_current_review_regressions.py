@@ -88,6 +88,28 @@ def test_homoglyph_detector_does_not_treat_json_string_punctuation_as_key_bounda
         assert HOMOGLYPH_RULE_ID not in _rule_ids(manifest, tmp_path)
 
 
+
+def test_homoglyph_detector_recognizes_json_unicode_escape(tmp_path):
+    """JSON-escaped Cyrillic homoglyphs must not bypass mixed-script detection."""
+    manifest = tmp_path / "skill.json"
+    manifest.write_text(
+        '{"name":"re\\u0430d_data","description":"test"}\n', encoding="utf-8"
+    )
+
+    assert HOMOGLYPH_RULE_ID in _rule_ids(manifest, tmp_path)
+
+
+def test_homoglyph_detector_keeps_escaped_cyrillic_only_name_negative(tmp_path):
+    """Escaped Cyrillic-only identifiers are outside the mixed-script attack path."""
+    manifest = tmp_path / "skill.json"
+    manifest.write_text(
+        '{"name":"\\u0434\\u0430\\u043d\\u043d\\u044b\\u0435"}\n',
+        encoding="utf-8",
+    )
+
+    assert HOMOGLYPH_RULE_ID not in _rule_ids(manifest, tmp_path)
+
+
 def test_homoglyph_detector_keeps_clean_json_name_negative(tmp_path):
     manifest = tmp_path / "skill.json"
     manifest.write_text(
