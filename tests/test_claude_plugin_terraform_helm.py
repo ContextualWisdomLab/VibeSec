@@ -253,6 +253,9 @@ def test_nested_shell_c_payloads_fail_admission() -> None:
         ("#!/bin/sh\nbash -e -c 'terraform apply'\n", _TERRAFORM_RULE),
         ("#!/bin/sh\nbash -ce 'terraform apply'\n", _TERRAFORM_RULE),
         ("#!/bin/sh\nsh -cx 'helm install app chart/'\n", _HELM_RULE),
+        ("#!/bin/sh\nsh -cc 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\ndash -s -c 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\nbash --login -c 'helm install app chart/'\n", _HELM_RULE),
         (
             "#!/bin/sh\nbash --noprofile -c 'helm install app chart/'\n",
             _HELM_RULE,
@@ -278,6 +281,9 @@ def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
         {"command": "bash", "args": ["-e", "-c", "terraform apply"]},
         {"command": "bash", "args": ["-ce", "terraform apply"]},
         {"command": "sh", "args": ["-cx", "helm install app chart/"]},
+        {"command": "sh", "args": ["-cc", "terraform apply"]},
+        {"command": "dash", "args": ["-i", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["--login", "-c", "helm install app chart/"]},
         {
             "command": "bash",
             "args": ["--noprofile", "-c", "helm install app chart/"],
