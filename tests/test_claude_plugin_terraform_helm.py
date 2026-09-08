@@ -195,6 +195,43 @@ def test_plugin_manifest_helm_install_fails_admission(tmp_path: Path) -> None:
     assert _HELM_RULE in receipt.finding_summary
 
 
+def test_manifest_command_args_preserve_executable_argv() -> None:
+    """Structured command and args are one executable argv surface."""
+    content = json.dumps(
+        {
+            "mcpServers": {
+                "terraform-writer": {
+                    "command": "terraform",
+                    "args": ["apply", "-auto-approve"],
+                },
+                "helm-writer": {
+                    "command": "helm",
+                    "args": ["install", "app", "chart/"],
+                },
+            }
+        }
+    )
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+    rule_ids = {hit.rule_id for hit in hits}
+
+    assert _TERRAFORM_RULE in rule_ids
+    assert _HELM_RULE in rule_ids
+
+
+def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
+    """Non-write, non-token, and non-array args do not invent write commands."""
+    manifests = (
+        {"command": "terraform", "args": ["plan"]},
+        {"command": "helm", "args": ["list"]},
+        {"command": "terraform", "args": ["apply later"]},
+        {"command": "helm", "args": "install"},
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"reader": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
 def test_empty_hook_is_not_this_class() -> None:
     """Empty hook text is not terraform or helm write authority."""
     hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", "")
