@@ -259,3 +259,78 @@ def test_vendored_hook_is_not_this_class(tmp_path: Path, command: str) -> None:
     vendor.chmod(0o755)
     assert _hits(root, _KUBECTL_RULE) == []
     assert _hits(root, _DOCKER_PUSH_RULE) == []
+
+def _direct_rule_ids(content: str, *, manifest: bool = False) -> set[str]:
+    """Return deployment-write rule identities for one in-memory surface."""
+    filename = "plugin.json" if manifest else "deploy.sh"
+    path = ".claude-plugin/plugin.json" if manifest else "hooks/deploy.sh"
+    return {
+        hit.rule_id
+        for hit in inspect_claude_plugin_file(filename, path, content)
+        if hit.rule_id in _THIS_CLASS
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_rule"),
+    (
+        ({"command": "kubectl", "args": ["apply", "-f", "deploy.yml"]}, _KUBECTL_RULE),
+        ({"command": "/usr/bin/kubectl", "args": ["apply"]}, _KUBECTL_RULE),
+        ({"command": "docker", "args": ["push", "example/app:1"]}, _DOCKER_PUSH_RULE),
+        (
+            {"command": "docker.exe", "args": ["image", "push", "example/app:1"]},
+            _DOCKER_PUSH_RULE,
+        ),
+    ),
+)
+def test_manifest_typed_argv_detects_deployment_write(
+    payload: dict[str, object], expected_rule: str
+) -> None:
+    """Typed argv preserves executable and argument identity."""
+    assert expected_rule in _direct_rule_ids(json.dumps(payload), manifest=True)
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_rule"),
+    (
+        ("sh -c 'kubectl apply -f deploy.yml'", _KUBECTL_RULE),
+        ("bash -lc 'docker image push example/app:1'", _DOCKER_PUSH_RULE),
+    ),
+)
+def test_nested_shell_payload_detects_deployment_write(
+    command: str, expected_rule: str
+) -> None:
+    """A bounded shell -c payload remains executable command text."""
+    assert expected_rule in _direct_rule_ids(command)
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        json.dumps({"description": "kubectl apply is forbidden"}),
+        "echo 'docker push example/app:1'",
+        "sh -nc 'kubectl apply -f deploy.yml'",
+        "VALUE='docker push example/app:1'",
+    ),
+)
+def test_inert_prose_reporting_and_noexec_payload_stay_negative(content: str) -> None:
+    """Descriptions, reporting arguments, and noexec payloads are inert."""
+    assert _direct_rule_ids(content, manifest=content.startswith("{")) == set()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"command": "kubectl", "args": ["apply-now"]},
+        {"command": " kubectl ", "args": ["apply"]},
+        {"command": "docker", "args": ["pull", "example/app:1"]},
+        {"command": "docker", "args": ["image", "pushLocal"]},
+        {"command": "docker", "args": "push example/app:1"},
+        {"command": "docker", "args": ["push", 1]},
+    ),
+)
+def test_manifest_typed_argv_near_misses_stay_negative(
+    payload: dict[str, object]
+) -> None:
+    """Malformed types and near verbs do not broaden authority detection."""
+    assert _direct_rule_ids(json.dumps(payload), manifest=True) == set()
