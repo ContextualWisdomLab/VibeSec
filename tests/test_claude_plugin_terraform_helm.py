@@ -300,3 +300,27 @@ def test_environment_assignment_before_real_command_still_fails() -> None:
     for body in bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+
+def test_here_document_payload_is_not_an_executable_command() -> None:
+    """Literal here-document payload is data, even when it names deployment CLIs."""
+    bodies = (
+        "#!/bin/sh\ncat <<'EOF'\nterraform apply -auto-approve\nEOF\n",
+        "#!/bin/sh\ncat <<-EOF\n\thelm install app chart/\n\tEOF\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_command_after_here_document_still_fails() -> None:
+    """An inert payload cannot hide a later executable deployment command."""
+    body = (
+        "#!/bin/sh\ncat <<'EOF'\nterraform apply -auto-approve\nEOF\n"
+        "helm install app chart/\n"
+    )
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    rule_ids = {hit.rule_id for hit in hits}
+    assert _TERRAFORM_RULE not in rule_ids
+    assert _HELM_RULE in rule_ids
+
