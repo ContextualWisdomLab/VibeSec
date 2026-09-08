@@ -344,3 +344,11 @@ SLSA. (n.d.). *SLSA specification version 1.2*. Retrieved September 2, 2026, fro
 - Hosted Tests run `34251749490` installed Chromium and passed 1003/1003 on Python 3.11 and 3.13. Python 3.13 captured list/detail hostile-payload scenes at desktop 1280×800 and mobile 390×844.
 - Exact-revision artifact `10066280431` contains five files, is 203095 bytes, and has SHA-256 `ea8f45f43f1ee5d18f8ee6df99a30c9ce6c70934bf305b3d919b5f81bc3281cc`. This closes the missing responsive browser-artifact gap, not independent approval or CodeQL handoff.
 - Eight repository/security workflows are terminal GREEN. #1192 is Ready with ordinary auto-merge; CodeQL compatibility handoff and current-head independent review remain protected merge gates.
+
+
+## 2026-09-08 dashboard mobile-overflow RED to GREEN
+
+- #1192 exact RED `1d5adbc2008708d137b73ab869ee8c49f6b53c88`, Tests `34252163223` / Python 3.13 job `102148974551`, measured document width 563px at a 390px viewport because unbroken hostile cell text expanded the history table's intrinsic width (1002 passed / 1 failed).
+- Minimal normal child `4dbee0ead77635b286cd1b2b2a4e53e0597b1de4` applies fixed table layout and `overflow-wrap:anywhere` to both history and detail tables. It keeps findings visible and wrapped rather than hiding or truncating them.
+- Exact Tests `34252370797` installed Chromium and passed 1003/1003 on Python 3.11 and 3.13. Artifact `10066505328` contains the responsive hostile-payload scenes and revision manifest, is 198275 bytes, and has SHA-256 `5b3dd439cabc92a870627ec6acbb319b8a4219c683bcea54fdef0ec648d89b50`.
+- Remaining source/security/CodeQL/review checks are evaluated only on `4dbee0e...`; predecessor GREEN does not transfer.
