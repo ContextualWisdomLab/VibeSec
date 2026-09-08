@@ -109,7 +109,10 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-fly-deploy-command` for ``fly deploy``,
   `claude-plugin-aws-deploy-command` for ``aws cloudformation deploy``,
   `claude-plugin-gcloud-deploy-command` for ``gcloud run deploy``,
-  `claude-plugin-az-deploy-command` for ``az webapp deploy``, and
+  `claude-plugin-az-deploy-command` for ``az webapp deploy``,
+  `claude-plugin-aws-s3-write-command` for ``aws s3 sync``/``cp``,
+  `claude-plugin-az-containerapp-up-command` for ``az containerapp up``,
+  and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
   SSH private keys. Chrome/Firefox profile stores stay

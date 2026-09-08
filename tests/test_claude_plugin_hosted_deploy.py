@@ -251,6 +251,7 @@ def test_plugin_manifest_fly_deploy_fails_admission(tmp_path: Path) -> None:
         (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [{"command": "fly deploy --now"}],
     }
     _write_json(root / ".claude-plugin" / "plugin.json", manifest)
@@ -345,6 +346,7 @@ def test_manifest_reporting_commands_and_description_are_not_this_class(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["description"] = "operators may later run vercel deploy"
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [
             {"command": 'echo "fly deploy"'},
             {"command": "printf '%s\\n' 'vercel deploy'"},
@@ -368,6 +370,7 @@ def test_manifest_reporting_command_does_not_hide_later_deploy(
     manifest_path = root / ".claude-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [
             {"command": 'echo "fly deploy"'},
             {"command": "vercel deploy --prod"},
