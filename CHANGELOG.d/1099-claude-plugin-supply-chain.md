@@ -134,7 +134,10 @@
   ``gh pr review``, ``gh release list``, ``kubectl get``, ``docker ps``,
   ``terraform apply`` fails as `claude-plugin-terraform-apply-command`.
   ``helm install`` fails as `claude-plugin-helm-install-command`.
-  ``terraform plan``, ``helm list``, ``vercel deploy``, and ``fly deploy``
+  ``vercel deploy`` fails as `claude-plugin-vercel-deploy-command`.
+  ``fly deploy`` and ``flyctl deploy`` fail as
+  `claude-plugin-fly-deploy-command`. ``terraform plan``, ``helm list``,
+  ``vercel ls``, and ``fly status``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.

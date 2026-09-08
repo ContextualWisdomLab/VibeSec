@@ -23,7 +23,9 @@ not permission, except that hook or manifest ``gh pr merge`` and
 Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
 deployment-write command findings. Hook or manifest ``terraform apply``
 and ``helm install`` fail closed as infra-write command findings.
-``terraform plan``, ``helm list``, ``vercel deploy``, and ``fly deploy``
+Hook or manifest ``vercel deploy`` and ``fly deploy`` fail closed as
+hosted-deploy command findings.
+``terraform plan``, ``helm list``, ``vercel ls``, and ``fly status``
 stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
@@ -31,7 +33,8 @@ GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
-``terraform plan``, and ``helm list`` stay inventory. Skill
+``terraform plan``, ``helm list``, ``vercel ls``, and ``fly status``
+stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -245,6 +248,16 @@ CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE: Final = (
     "is write authority on a cluster. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_VERCEL_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs vercel deploy. Publishing to a "
+    "hosted platform is write authority. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs fly deploy. Publishing to a "
+    "hosted platform is write authority. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -368,6 +381,8 @@ _DOCKER_PUSH_COMMAND = re.compile(
 )
 _TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
 _HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
+_VERCEL_DEPLOY_COMMAND = re.compile(r"\bvercel\s+deploy\b", re.IGNORECASE)
+_FLY_DEPLOY_COMMAND = re.compile(r"\b(?:fly|flyctl)\s+deploy\b", re.IGNORECASE)
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
     re.IGNORECASE,
@@ -602,7 +617,7 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         "deployment_write",
         re.compile(
             r"\b(?:kubectl\s+apply|terraform\s+apply|helm\s+install|"
-            r"vercel\s+deploy|fly\s+deploy|docker\s+push)\b",
+            r"vercel\s+deploy|fly(?:ctl)?\s+deploy|docker\s+push)\b",
             re.IGNORECASE,
         ),
     ),
@@ -856,6 +871,8 @@ def inspect_claude_plugin_file(
         hits.extend(_docker_push_command_hits(content))
         hits.extend(_terraform_apply_command_hits(content))
         hits.extend(_helm_install_command_hits(content))
+        hits.extend(_vercel_deploy_command_hits(content))
+        hits.extend(_fly_deploy_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1614,6 +1631,52 @@ def _helm_install_command_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet="helm install",
             message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _vercel_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``vercel deploy`` findings with a command label, not tokens.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit when ``vercel deploy`` is present. ``vercel ls`` and
+        README wording are not this class.
+    """
+    match = _VERCEL_DEPLOY_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-vercel-deploy-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="vercel deploy",
+            message=CLAUDE_PLUGIN_VERCEL_DEPLOY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _fly_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return ``fly deploy`` findings with a command label, not app names.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for ``fly deploy`` or ``flyctl deploy``.
+        ``fly status`` is not this class.
+    """
+    match = _FLY_DEPLOY_COMMAND.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-fly-deploy-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="fly deploy",
+            message=CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE,
         ),
     )
 

@@ -100,14 +100,16 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-kubectl-apply-command` for ``kubectl apply``,
   `claude-plugin-docker-push-command` for ``docker push``,
   `claude-plugin-terraform-apply-command` for ``terraform apply``,
-  `claude-plugin-helm-install-command` for ``helm install``, and
+  `claude-plugin-helm-install-command` for ``helm install``,
+  `claude-plugin-vercel-deploy-command` for ``vercel deploy``,
+  `claude-plugin-fly-deploy-command` for ``fly deploy``, and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
   SSH private keys. Chrome/Firefox profile stores stay
   `claude-plugin-browser-profile-access`. Hardcoded PATs stay
   `claude-plugin-github-write-token`. ``gh issue create``, ``gh pr review``,
   ``kubectl get``, ``docker ps``, ``terraform plan``, ``helm list``,
-  ``vercel deploy``, and ``fly deploy`` stay inventory.
+  ``vercel ls``, and ``fly status`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution

@@ -100,8 +100,10 @@ def test_terraform_plan_and_helm_list_stay_inventory(tmp_path: Path) -> None:
     assert receipt.scan_result == "pass"
 
 
-def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
-    """Hosted deploy CLIs stay inventory; this slice does not own them."""
+def test_vercel_deploy_and_fly_deploy_are_not_terraform_or_helm(
+    tmp_path: Path,
+) -> None:
+    """Hosted deploy CLIs are not the terraform or helm command family."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nvercel deploy\nfly deploy\n",
@@ -110,7 +112,6 @@ def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 
