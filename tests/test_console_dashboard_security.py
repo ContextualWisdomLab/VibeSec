@@ -24,6 +24,16 @@ def _capture_browser_evidence(page, scene: str) -> None:
             ("mobile", 390, 844),
         ):
             page.set_viewport_size({"width": width, "height": height})
+            layout = page.evaluate(
+                """() => ({
+                  viewport: window.innerWidth,
+                  document: document.documentElement.scrollWidth,
+                })"""
+            )
+            assert layout["document"] <= layout["viewport"], (
+                f"{scene} horizontally overflows {label}: "
+                f"document={layout['document']} viewport={layout['viewport']}"
+            )
             page.screenshot(
                 path=str(target / f"dashboard-hostile-{scene}-{label}.png"),
                 full_page=True,
