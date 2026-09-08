@@ -278,3 +278,25 @@ def test_command_substitution_remains_executable() -> None:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
 
+
+
+def test_assignment_values_are_not_executable_commands() -> None:
+    """An unquoted assignment value cannot turn its following word into the CLI."""
+    bodies = (
+        "#!/bin/sh\nmessage=terraform apply -auto-approve\n",
+        "#!/bin/sh\ncommand=helm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_environment_assignment_before_real_command_still_fails() -> None:
+    """Environment assignments do not hide a later executable deployment CLI."""
+    bodies = (
+        "#!/bin/sh\nTF_IN_AUTOMATION=1 terraform apply -auto-approve\n",
+        "#!/bin/sh\nHELM_NAMESPACE=prod helm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
