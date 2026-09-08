@@ -393,6 +393,16 @@ CLAUDE_PLUGIN_LUAROCKS_UPLOAD_COMMAND_MESSAGE: Final = (
     "package is write authority on LuaRocks. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_SBT_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs sbt publish. Publishing a "
+    "package is write authority on a Maven repository. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_CONAN_UPLOAD_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs conan upload. Publishing a "
+    "package is write authority on Conan Center. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -570,6 +580,15 @@ _GRADLE_PUBLISH_COMMAND = re.compile(
 )
 _LUAROCKS_UPLOAD_COMMAND = re.compile(
     r"\bluarocks\s+upload\b",
+    re.IGNORECASE,
+)
+_SBT_PUBLISH_COMMAND = re.compile(
+    r"\bsbt[ \t]+(?P<quote>['\"]?)(?P<verb>publish(?:Signed)?)(?P=quote)"
+    r"(?=$|[ \t;&|)`])",
+    re.IGNORECASE,
+)
+_CONAN_UPLOAD_COMMAND = re.compile(
+    r"\bconan\s+upload\b",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -867,7 +886,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"cabal\s+(?:v2-)?upload|"
             r"mvn\s+deploy|"
             r"gradlew?\s+publish|"
-            r"luarocks\s+upload)\b",
+            r"luarocks\s+upload|"
+            r"sbt\s+publish(?:Signed)?|"
+            r"conan\s+upload)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1102,6 +1123,8 @@ def inspect_claude_plugin_file(
         hits.extend(_mvn_deploy_command_hits(content, manifest=manifest))
         hits.extend(_gradle_publish_command_hits(content, manifest=manifest))
         hits.extend(_luarocks_upload_command_hits(content, manifest=manifest))
+        hits.extend(_sbt_publish_command_hits(content, manifest=manifest))
+        hits.extend(_conan_upload_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2809,6 +2832,67 @@ def _luarocks_upload_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="luarocks upload",
                 message=CLAUDE_PLUGIN_LUAROCKS_UPLOAD_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _sbt_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``sbt publish`` findings with a command label, not artifact names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``sbt publish`` or ``sbt publishSigned``.
+        ``sbt compile`` and ``sbt publishLocal`` are not this class.
+        ``gradle publish`` stays the Gradle class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _SBT_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        verb = match.group("verb")
+        snippet = (
+            "sbt publishSigned" if verb.lower() == "publishsigned" else "sbt publish"
+        )
+        return (
+            PluginHit(
+                rule_id="claude-plugin-sbt-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_SBT_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _conan_upload_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``conan upload`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``conan upload``. ``conan list`` is not
+        this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _CONAN_UPLOAD_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-conan-upload-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="conan upload",
+                message=CLAUDE_PLUGIN_CONAN_UPLOAD_COMMAND_MESSAGE,
             ),
         )
     return ()
