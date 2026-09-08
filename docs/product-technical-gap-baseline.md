@@ -280,6 +280,14 @@ re-fetch docs/issues/PRs/current heads
 67. Keep #1188 Draft stacked on #1187 at `63c42a7`. Executable `sbt publish` / `sbt publishSigned` and `conan upload` fail closed; quoted/unquoted `sbt publishLocal` stay inventory. Assignment values stay inventory. Deno/pod successor is #1189. Do not invent `composer publish` or `go upload`. Do not Close #1099 or #1187.
 68. Keep #1189 Draft stacked on #1188 at `0ce7e13`. Executable `deno publish` and `pod trunk push` fail closed; `deno info`, `pod install`, and `pod lib lint` stay inventory. Assignment values stay inventory. Do not invent `composer publish` or `go upload`. Do not Close #1099 or #1188. Remaining unique leftover: `swift package-registry publish` / `opam publish`.
 
+
+## 2026-09-08 quoted CLI and no-op command-context evidence
+
+- **Gap G-06 / detector precision and recall:** PR #1189 RED `18be77f1271b2c4d3f9dc0e59608715eb410c5af` and `c0124b7ce4be48b007d0e6700863d577cbc70158` reproduce quoted CLI-name false negatives for `"deno" publish` and `'pod' trunk push`. GREEN `31ff8f492843f8d6d34dc1a6e8445d9904c35172` / `425a1d87ac365118958ff24e847a75e4e7509d29` restores admission and capability inventory.
+- **False-positive boundary:** RED `d8cacddaa798a37d1bf79c030f40452590e0fa25` proves quoted near-task suffixes were inventory false positives; exact #1189 head `f7964beb79be28ca7acc46971a2137830d1781ca` rejects them. Exact source/test AST passes, command-context helpers pass 10/10, and inventory probes pass 4/4 positive plus 4/4 negative. No hosted workflow exists on this custom base, so the PR remains Draft.
+- **Canonical shared parser repair:** #1173 RED `5bdcde76bde14742c96dbdd9a6919438e2ae6c17` → GREEN exact head `873370bfceba0f161c6d1682459741f84d0ef92a` removes false findings from `:`/`true`/`false` argument text while preserving later real commands. Exact source/test AST and 7/7 helper probes pass. #1174 and its successors remain Draft until this parent is non-force integrated; predecessor evidence does not transfer.
+- **Open P1 boundaries:** structural manifest `command` currently discards sibling `args`, and nested `sh -c`/`bash -c` strings remain invisible to the shared executable-command parser. These are incomplete detector coverage, never Clean Scan evidence. Next action is canonical #1173 RED fixture → shared parser repair → successor restack → exact-head hosted integration and independent review.
+
 ## Standards and acceptance basis
 
 These references guide control design; they are not a claim of CSAP, SOC 2, or another certification.
