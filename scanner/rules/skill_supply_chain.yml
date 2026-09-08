@@ -57,7 +57,7 @@ rules:
 
   - id: skill-placeholder-template-unresolved
     patterns:
-      - pattern-regex: '(?im)(?:^[ \\t]*name[ \\t]*:[ \\t]*["'']?\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["'']?[ \\t]*$|^[ \\t]*\\{?[ \\t]*["'']name["''][ \\t]*:[ \\t]*["'']\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["''][ \\t]*\\}?[ \\t]*$|^[ \\t]*\\{[ \\t]*name[ \\t]*:[ \\t]*["'']?\\{\\{?[A-Za-z][A-Za-z0-9_-]*\\}\\}?["'']?[ \\t]*\\}[ \\t]*$)'
+      - pattern-regex: '(?im)(?:^[ \t]*name[ \t]*:[ \t]*["'']?\{\{?[A-Za-z][A-Za-z0-9_-]*\}\}?["'']?[ \t]*$|^[ \t]*["'']name["''][ \t]*:[ \t]*["'']\{\{?[A-Za-z][A-Za-z0-9_-]*\}\}?["''][ \t]*,?[ \t]*$|^[ \t]*\{[ \t]*(?:(?:[A-Za-z_][A-Za-z0-9_-]*|["''][^"''\n{}:,]+["''])[ \t]*:[ \t]*(?:"[^"\n]*"|''[^''\n]*''|true|false|null|-?[0-9]+(?:\.[0-9]+)?)[ \t]*,[ \t]*)*(?:["'']name["'']|name)[ \t]*:[ \t]*["'']?\{\{?[A-Za-z][A-Za-z0-9_-]*\}\}?["'']?(?:[ \t]*,[ \t]*(?:[A-Za-z_][A-Za-z0-9_-]*|["''][^"''\n{}:,]+["''])[ \t]*:[ \t]*(?:"[^"\n]*"|''[^''\n]*''|true|false|null|-?[0-9]+(?:\.[0-9]+)?))*[ \t]*\}[ \t]*$)'
     message: |
       Skill frontmatter still carries an unresolved placeholder name
       (e.g. "{skill-name}"). Placeholder templates pollute skill discovery and
