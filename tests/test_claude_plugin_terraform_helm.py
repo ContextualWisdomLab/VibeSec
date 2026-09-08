@@ -208,6 +208,10 @@ def test_manifest_command_args_preserve_executable_argv() -> None:
                     "command": "helm",
                     "args": ["install", "app", "chart/"],
                 },
+                "path-writer": {
+                    "command": "/usr/bin/terraform",
+                    "args": ["apply"],
+                },
             }
         }
     )
@@ -224,7 +228,13 @@ def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
         {"command": "terraform", "args": ["plan"]},
         {"command": "helm", "args": ["list"]},
         {"command": "terraform", "args": ["apply later"]},
+        {"command": "terraform", "args": ["applyLocal"]},
+        {"command": "terraform", "args": ["apply-now"]},
+        {"command": "helm", "args": ["install-chart"]},
+        {"command": "wrapper", "args": ["terraform", "apply"]},
+        {"command": "echo", "args": ["helm", "install", "app", "chart/"]},
         {"command": "helm", "args": "install"},
+        {"command": "terraform", "args": ["apply", 1]},
     )
     for manifest in manifests:
         content = json.dumps({"mcpServers": {"reader": manifest}})
