@@ -336,3 +336,11 @@ SLSA. (n.d.). *SLSA specification version 1.2*. Retrieved September 2, 2026, fro
 - Later concurrent `1456e14c3e7f2da37b7af8a84b04b5f44069cd32` reintroduced partial `parseInt` admission and deleted the Chromium workflow/dependencies plus browser/static security regressions. Its valid integer-projection goal was already fully carried by the stricter whole-value `Number` and non-negative safe-integer contract.
 - Normal atomic descendant `7e1bb470b25fda60e06a8adf38b709ad9997f70f` preserves every ancestor, restores the seven regressed files, and is 18 ahead / 0 behind #1117. Exact-tree inspection confirms the strict count boundary and browser/static corpus; fresh hosted Checks and independent review are pending, so #1192 remains Draft.
 - #999 predecessor `58f2319fc594b17bb28409450a7a6944ae97efdd` results do not transfer to this documentation change. Ordinary protected auto-merge remains the only integration path.
+
+
+## 2026-09-08 dashboard responsive evidence binding
+
+- #1192 exact head `c98c301828c0533a927d82aceb3179f245726908` is a normal 1-ahead / 0-behind descendant of `7e1bb470...`; it preserves the strict count, escaped identity/text, own-property severity and complete #1117 browser/static corpus.
+- Hosted Tests run `34251749490` installed Chromium and passed 1003/1003 on Python 3.11 and 3.13. Python 3.13 captured list/detail hostile-payload scenes at desktop 1280×800 and mobile 390×844.
+- Exact-revision artifact `10066280431` contains five files, is 203095 bytes, and has SHA-256 `ea8f45f43f1ee5d18f8ee6df99a30c9ce6c70934bf305b3d919b5f81bc3281cc`. This closes the missing responsive browser-artifact gap, not independent approval or CodeQL handoff.
+- Eight repository/security workflows are terminal GREEN. #1192 is Ready with ordinary auto-merge; CodeQL compatibility handoff and current-head independent review remain protected merge gates.
