@@ -363,6 +363,16 @@ CLAUDE_PLUGIN_PUB_PUBLISH_COMMAND_MESSAGE: Final = (
     "package is write authority on pub.dev. Remove the command. "
     "[CWE-269 - Improper Privilege Management]"
 )
+CLAUDE_PLUGIN_HEX_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs hex publish. Publishing a "
+    "package is write authority on Hex.pm. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_CONDA_UPLOAD_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs conda upload. Publishing a "
+    "package is write authority on Anaconda.org. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -516,6 +526,14 @@ _NUGET_PUSH_COMMAND = re.compile(
 )
 _PUB_PUBLISH_COMMAND = re.compile(
     r"\b(?:(?P<sdk>dart|flutter)\s+)?pub\s+publish\b",
+    re.IGNORECASE,
+)
+_HEX_PUBLISH_COMMAND = re.compile(
+    r"\b(?:mix\s+hex\.publish|hex\s+publish)\b",
+    re.IGNORECASE,
+)
+_CONDA_UPLOAD_COMMAND = re.compile(
+    r"\b(?P<cli>conda|anaconda)\s+upload\b",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -802,7 +820,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
             r"uv\s+publish|poetry\s+publish|gem\s+push|"
             r"(?:dotnet\s+)?nuget\s+push|"
-            r"(?:dart\s+|flutter\s+)?pub\s+publish)\b",
+            r"(?:dart\s+|flutter\s+)?pub\s+publish|"
+            r"mix\s+hex\.publish|hex\s+publish|"
+            r"(?:conda|anaconda)\s+upload)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1031,6 +1051,8 @@ def inspect_claude_plugin_file(
         hits.extend(_gem_push_command_hits(content, manifest=manifest))
         hits.extend(_nuget_push_command_hits(content, manifest=manifest))
         hits.extend(_pub_publish_command_hits(content, manifest=manifest))
+        hits.extend(_hex_publish_command_hits(content, manifest=manifest))
+        hits.extend(_conda_upload_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2494,6 +2516,66 @@ def _pub_publish_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet=snippet,
                 message=CLAUDE_PLUGIN_PUB_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _hex_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``hex publish`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``hex publish`` or ``mix hex.publish``.
+        ``hex info`` is not this class. ``dart pub publish`` stays the
+        pub.dev class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _HEX_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        token = match.group(0).lower()
+        snippet = "mix hex.publish" if token.startswith("mix ") else "hex publish"
+        return (
+            PluginHit(
+                rule_id="claude-plugin-hex-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_HEX_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _conda_upload_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``conda upload`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``conda upload`` or ``anaconda upload``.
+        ``conda list`` is not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _CONDA_UPLOAD_COMMAND)
+        if match is None:
+            continue
+        snippet = match.group("cli").lower() + " upload"
+        return (
+            PluginHit(
+                rule_id="claude-plugin-conda-upload-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_CONDA_UPLOAD_COMMAND_MESSAGE,
             ),
         )
     return ()
