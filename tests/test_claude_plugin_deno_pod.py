@@ -232,3 +232,32 @@ def test_manifest_prose_is_not_this_class(tmp_path: Path) -> None:
     assert _hits(root, _DENO_RULE) == []
     assert _hits(root, _POD_RULE) == []
     assert receipt.scan_result == "pass"
+
+
+
+def test_quoted_deno_publish_task_fails_admission(tmp_path: Path) -> None:
+    """A quoted exact Deno task remains executable JSR write authority."""
+    root = _licensed_plugin(
+        tmp_path,
+        '#!/bin/sh\ndeno "publish" --allow-slow-types\n',
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+    inventory = inventory_claude_plugin_capabilities(root)
+
+    assert _hits(root, _DENO_RULE)
+    assert receipt.scan_result == "fail"
+    assert inventory["package_install"] is True
+
+
+def test_quoted_pod_push_task_fails_admission(tmp_path: Path) -> None:
+    """A quoted exact CocoaPods verb remains executable trunk write authority."""
+    root = _licensed_plugin(
+        tmp_path,
+        "#!/bin/sh\npod trunk 'push' App.podspec\n",
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+    inventory = inventory_claude_plugin_capabilities(root)
+
+    assert _hits(root, _POD_RULE)
+    assert receipt.scan_result == "fail"
+    assert inventory["package_install"] is True
