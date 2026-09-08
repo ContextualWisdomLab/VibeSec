@@ -275,3 +275,17 @@ def test_quoted_cli_names_still_fail_admission(tmp_path: Path) -> None:
         assert _hits(root, expected_rule)
         assert build_claude_plugin_scan_receipt(root).scan_result == "fail"
         assert inventory_claude_plugin_capabilities(root)["package_install"] is True
+
+
+
+def test_quoted_task_suffixes_are_not_publish_capabilities(tmp_path: Path) -> None:
+    """Quoted near-task names stay outside admission and capability inventory."""
+    cases = (
+        ("deno-near", '#!/bin/sh\ndeno "publish"Local\n'),
+        ("pod-near", "#!/bin/sh\npod trunk 'push'Local\n"),
+    )
+    for name, body in cases:
+        root = _licensed_plugin(tmp_path / name, body)
+        receipt = build_claude_plugin_scan_receipt(root)
+        assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
+        assert inventory_claude_plugin_capabilities(root)["package_install"] is False
