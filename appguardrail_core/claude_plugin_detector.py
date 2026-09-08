@@ -910,9 +910,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"luarocks\s+upload|"
             r"sbt\s+publish(?:Signed)?|"
             r"conan\s+upload|"
-            r"deno[ \t]+(?:publish|\"publish\"|'publish')|"
+            r"deno[ \t]+(?:publish|\"publish(?=\")|'publish(?='))|"
             r"pod[ \t]+(?:trunk|\"trunk\"|'trunk')[ \t]+"
-            r"(?:push|\"push\"|'push'))\b",
+            r"(?:push|\"push(?=\")|'push(?=')))\b",
             re.IGNORECASE,
         ),
     ),
