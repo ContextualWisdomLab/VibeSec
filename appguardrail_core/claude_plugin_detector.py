@@ -24,9 +24,13 @@ Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
 deployment-write command findings. Hook or manifest ``terraform apply``
 and ``helm install`` fail closed as infra-write command findings.
 Hook or manifest ``vercel deploy`` and ``fly deploy`` fail closed as
-hosted-deploy command findings. Unquoted ``#`` comments and
+hosted-deploy command findings. Hook or manifest ``aws cloudformation
+deploy``, ``aws deploy create-deployment``, ``gcloud run|app|functions
+deploy``, and ``az webapp deploy`` fail closed as cloud-deploy command
+findings. Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
-``terraform plan``, ``helm list``, ``vercel ls``, and ``fly status``
+``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
+``aws s3 ls``, ``gcloud config list``, and ``az account show``
 stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
@@ -34,7 +38,8 @@ GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
-``terraform plan``, ``helm list``, ``vercel ls``, and ``fly status``
+``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
+``aws s3 ls``, ``gcloud config list``, and ``az account show``
 stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
@@ -276,6 +281,21 @@ CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE: Final = (
     "hosted platform is write authority. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_AWS_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs AWS deploy writes. CloudFormation "
+    "deploy and CodeDeploy create-deployment are write authority. Remove "
+    "the command. [CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_GCLOUD_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs gcloud deploy. Publishing Cloud "
+    "Run, App Engine, or Functions is write authority. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
+CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs az webapp deploy. Publishing an "
+    "Azure web app is write authority. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -402,6 +422,15 @@ _TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
 _HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
 _VERCEL_DEPLOY_COMMAND = re.compile(r"\bvercel\s+deploy\b", re.IGNORECASE)
 _FLY_DEPLOY_COMMAND = re.compile(r"\b(?:fly|flyctl)\s+deploy\b", re.IGNORECASE)
+_AWS_DEPLOY_COMMAND = re.compile(
+    r"\baws\s+(?:cloudformation\s+deploy|deploy\s+create-deployment)\b",
+    re.IGNORECASE,
+)
+_GCLOUD_DEPLOY_COMMAND = re.compile(
+    r"\bgcloud\s+(?P<service>run|app|functions)\s+deploy\b",
+    re.IGNORECASE,
+)
+_AZ_DEPLOY_COMMAND = re.compile(r"\baz\s+webapp\s+deploy\b", re.IGNORECASE)
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
@@ -638,7 +667,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         "deployment_write",
         re.compile(
             r"\b(?:kubectl\s+apply|terraform\s+apply|helm\s+install|"
-            r"vercel\s+deploy|fly(?:ctl)?\s+deploy|docker\s+push)\b",
+            r"vercel\s+deploy|fly(?:ctl)?\s+deploy|docker\s+push|"
+            r"aws\s+(?:cloudformation\s+deploy|deploy\s+create-deployment)|"
+            r"gcloud\s+(?:run|app|functions)\s+deploy|az\s+webapp\s+deploy)\b",
             re.IGNORECASE,
         ),
     ),
@@ -894,6 +925,9 @@ def inspect_claude_plugin_file(
         hits.extend(_helm_install_command_hits(content))
         hits.extend(_vercel_deploy_command_hits(content))
         hits.extend(_fly_deploy_command_hits(content))
+        hits.extend(_aws_deploy_command_hits(content))
+        hits.extend(_gcloud_deploy_command_hits(content))
+        hits.extend(_az_deploy_command_hits(content))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1861,6 +1895,79 @@ def _fly_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet="fly deploy",
             message=CLAUDE_PLUGIN_FLY_DEPLOY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _aws_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return AWS deploy-write findings with a command label, not secrets.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for executable ``aws cloudformation deploy`` or
+        ``aws deploy create-deployment``. ``aws s3 ls`` and echo
+        lookalikes are not this class.
+    """
+    match = _executable_command_match(content, _AWS_DEPLOY_COMMAND)
+    if match is None:
+        return ()
+    token = match.group(0).lower()
+    snippet = " ".join(token.split())
+    return (
+        PluginHit(
+            rule_id="claude-plugin-aws-deploy-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=snippet,
+            message=CLAUDE_PLUGIN_AWS_DEPLOY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _gcloud_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return gcloud deploy findings with a service-qualified command label.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for executable ``gcloud run|app|functions deploy``.
+        ``gcloud config list`` is not this class.
+    """
+    match = _executable_command_match(content, _GCLOUD_DEPLOY_COMMAND)
+    if match is None:
+        return ()
+    service = match.group("service").lower()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-gcloud-deploy-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=f"gcloud {service} deploy",
+            message=CLAUDE_PLUGIN_GCLOUD_DEPLOY_COMMAND_MESSAGE,
+        ),
+    )
+
+
+def _az_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return Azure webapp deploy findings with a command label, not names.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        One hit for executable ``az webapp deploy``. ``az account show``
+        is not this class.
+    """
+    match = _executable_command_match(content, _AZ_DEPLOY_COMMAND)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-az-deploy-command",
+            line=content[: match.start()].count("\n") + 1,
+            snippet="az webapp deploy",
+            message=CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE,
         ),
     )
 
