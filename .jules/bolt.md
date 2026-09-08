@@ -77,3 +77,6 @@
 ## 2024-11-20 - Optimize multiple tuple generation from a single collection
 **Learning:** `build_rule_metadata` derives exactly two collections, `owasp` and `cwe`, from the same references. Replacing its two generator traversals with one explicit loop reduces element visits from about 2N to N. Both versions remain O(N), so this is a constant-factor optimization rather than an asymptotic complexity improvement.
 **Action:** Combine repeated traversal when fixed derived collections share one source, while preserving ordering and classification semantics. Benchmark the production hot path before claiming a material wall-clock improvement.
+## 2024-05-24 - Optimizing Python type checks in hot loops
+**Learning:** `isinstance(obj, pathlib.Path)` is significantly slower in hot loops than checking concrete built-ins because `Path` is an Abstract Base Class. However, replacing `isinstance(obj, str)` with `type(obj) is str` to save nanoseconds breaks support for subclasses (like `StringPath` used in test boundaries), causing test failures while yielding negligible real-world benefits over `isinstance`.
+**Action:** When handling unions like `str | Path`, invert the logic to check the concrete type first (`isinstance(obj, str)`) instead of the ABC, but always stick to `isinstance` to preserve subclass support.
