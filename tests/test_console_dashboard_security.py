@@ -8,6 +8,78 @@ CONSOLE_PATH = (
 )
 
 
+def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
+    """Hostile list/detail fields stay data and inherited severity keys use INFO."""
+    markup = '<img src=x onerror=alert("xss")>'
+    scan_id = '123">' + markup
+    scans = {
+        "scans": [
+            {
+                "id": scan_id,
+                "created_at": markup,
+                "repo": markup,
+                "commit": markup,
+                "deploy_blocking": markup,
+                "new_blocking": markup,
+                "total": markup,
+                "severity_counts": {"CRITICAL": markup},
+            }
+        ]
+    }
+    detail = {
+        "id": scan_id,
+        "created_at": markup,
+        "repo": markup,
+        "findings": [
+            {
+                "severity": "constructor",
+                "rule_id": markup,
+                "message": markup,
+                "file": markup,
+                "line": markup,
+            }
+        ],
+    }
+    dialogs = []
+
+    def record_dialog(dialog) -> None:
+        dialogs.append(dialog.message)
+        dialog.dismiss()
+
+    page.on("dialog", record_dialog)
+    page.goto(f"file://{CONSOLE_PATH}")
+    page.evaluate(
+        """([listPayload, detailPayload]) => {
+          window.fetch = async (url) => ({
+            ok: true,
+            status: 200,
+            json: async () => String(url).endsWith("/api/v1/scans")
+              ? listPayload
+              : detailPayload,
+          });
+        }""",
+        [scans, detail],
+    )
+    page.evaluate('sessionStorage.setItem("ag_key", "test-key")')
+    page.evaluate("load()")
+
+    scan_row = page.locator("tr.scan")
+    scan_row.wait_for()
+    assert scan_row.evaluate("element => element.dataset.id") == scan_id
+    assert page.locator("img").count() == 0
+    assert page.locator("#stats .n").all_text_contents() == ["0", "0", "0", "1"]
+
+    scan_row.click()
+    detail_panel = page.locator("#detail:not(.hidden)")
+    detail_panel.wait_for()
+    assert detail_panel.locator("img").count() == 0
+    assert markup in detail_panel.text_content()
+    assert detail_panel.locator(".pill").get_attribute("style") == (
+        "background:var(--info)"
+    )
+    assert dialogs == []
+
+
 def test_trend_accessibility_attributes_escape_blocking_count() -> None:
     """Untrusted scan counts must not escape innerHTML attribute values."""
     html = CONSOLE_PATH.read_text(encoding="utf-8")
