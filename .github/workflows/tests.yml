@@ -31,7 +31,31 @@ jobs:
       - name: Install Playwright browsers
         run: python -m playwright install chromium
       - name: Run tests
+        if: matrix.python-version != '3.13'
         run: python -m pytest -q
+      - name: Run tests with dashboard browser evidence
+        if: matrix.python-version == '3.13'
+        env:
+          APPGUARDRAIL_UI_EVIDENCE_DIR: artifacts/ui
+        run: python -m pytest -q
+      - name: Bind dashboard browser evidence to this run
+        if: matrix.python-version == '3.13'
+        env:
+          REQUESTED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p artifacts/ui
+          {
+            printf 'requested_pr_head_sha=%s\n' "$REQUESTED_PR_HEAD_SHA"
+            printf 'checkout_sha=%s\n' "$(git rev-parse HEAD)"
+          } > artifacts/ui/revision.txt
+      - name: Upload dashboard browser evidence
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-browser-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/ui/
+          if-no-files-found: error
+          retention-days: 14
       - name: Verify 100% statement coverage for live drift modules
         if: matrix.python-version == '3.13'
         run: |

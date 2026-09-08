@@ -1,11 +1,36 @@
 """Security contracts for the standalone control-plane console."""
 
+import os
 from pathlib import Path
 
 
 CONSOLE_PATH = (
     Path(__file__).resolve().parents[1] / "scanner" / "dashboard" / "console.html"
 )
+
+
+def _capture_browser_evidence(page, scene: str) -> None:
+    """Persist exact hostile-rendering scenes only when CI requests evidence."""
+    evidence_dir = os.environ.get("APPGUARDRAIL_UI_EVIDENCE_DIR", "").strip()
+    if not evidence_dir:
+        return
+
+    target = Path(evidence_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    original_viewport = page.viewport_size
+    try:
+        for label, width, height in (
+            ("desktop", 1280, 800),
+            ("mobile", 390, 844),
+        ):
+            page.set_viewport_size({"width": width, "height": height})
+            page.screenshot(
+                path=str(target / f"dashboard-hostile-{scene}-{label}.png"),
+                full_page=True,
+            )
+    finally:
+        if original_viewport is not None:
+            page.set_viewport_size(original_viewport)
 
 
 def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
@@ -69,6 +94,7 @@ def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
     assert page.locator("img").count() == 0
     assert page.locator("#stats .n").all_text_contents() == ["0", "0", "0", "1"]
     assert scan_row.locator("td").all_text_contents()[-3:] == ["0", "0", "0"]
+    _capture_browser_evidence(page, "list")
 
     scan_row.click()
     detail_panel = page.locator("#detail:not(.hidden)")
@@ -79,6 +105,7 @@ def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
         "element => element.style.background"
     ) == "var(--info)"
     assert dialogs == []
+    _capture_browser_evidence(page, "detail")
 
     detail_panel.locator(".close-btn").click()
     assert detail_panel.is_hidden()
