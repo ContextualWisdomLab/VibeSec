@@ -20,7 +20,6 @@ on:
       - ".github/workflows/commercial-readiness-loop.yml"
       - ".github/workflows/commercial-readiness-agent-coverage.yml"
   pull_request:
-    branches: [develop, main]
     paths:
       - "scripts/ci/commercial_readiness_loop.py"
       - "scripts/ci/commercial_readiness_reconcile.py"

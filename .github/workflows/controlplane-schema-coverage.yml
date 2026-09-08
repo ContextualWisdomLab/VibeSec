@@ -11,7 +11,6 @@ on:
       - "CHANGELOG.d/871-retention-schema-migration.md"
       - ".github/workflows/controlplane-schema-coverage.yml"
   pull_request:
-    branches: [develop, main]
     paths:
       - "appguardrail_core/controlplane_schema.py"
       - "appguardrail_core/__init__.py"
