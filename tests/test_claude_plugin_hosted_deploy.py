@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from appguardrail_core import claude_plugin_detector as detector
 from appguardrail_core.claude_plugin_detector import (
     _collect_plugin_hits,
     build_claude_plugin_scan_receipt,
@@ -275,3 +276,61 @@ def test_terraform_apply_without_hosted_deploy_stays_the_terraform_class() -> No
     rule_ids = {hit.rule_id for hit in hits}
     assert _TERRAFORM_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
+
+
+def test_print_fly_deploy_lookalike_is_not_this_class() -> None:
+    """A Python ``print`` of fly deploy is not hosted write authority."""
+    hits = inspect_claude_plugin_file(
+        "session.sh",
+        "hooks/session.sh",
+        'print("fly deploy")\n',
+    )
+    assert [hit.rule_id for hit in hits if hit.rule_id in _THIS_CLASS] == []
+
+
+def test_pipeline_and_or_segments_keep_executable_fly_deploy() -> None:
+    """Unquoted ``||``, ``;``, ``|``, and ``&`` still run fly deploy."""
+    body = "#!/bin/sh\nfalse || fly deploy; true | flyctl deploy & fly deploy\n"
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    assert any(hit.rule_id == _FLY_RULE and hit.snippet == "fly deploy" for hit in hits)
+
+
+def test_quoted_ampersand_echo_is_not_this_class() -> None:
+    """Quoted ``&&`` inside echo does not invent a second command segment."""
+    hits = inspect_claude_plugin_file(
+        "session.sh",
+        "hooks/session.sh",
+        '#!/bin/sh\necho "ready && fly deploy"\n',
+    )
+    assert [hit.rule_id for hit in hits if hit.rule_id in _THIS_CLASS] == []
+
+
+def test_hosted_deploy_helpers_cover_comment_quote_and_token_edges() -> None:
+    """Comment, escape, splitter, and token helpers keep executable matches only."""
+    assert detector._unquoted_hash_index("vercel deploy # note") == len("vercel deploy ")
+    assert detector._unquoted_hash_index("echo '# vercel deploy'") is None
+    assert detector._unquoted_hash_index('echo "# fly deploy"') is None
+    assert detector._unquoted_hash_index("echo \\# not-a-comment") is None
+    assert detector._unquoted_hash_index("") is None
+    assert detector._first_shell_token("   ") == ""
+    assert detector._first_shell_token("/usr/bin/echo hi") == "echo"
+    assert detector._first_shell_token("printf.exe hi") == "printf"
+    assert detector._first_shell_token("print('x')") == "print"
+    quoted = 'echo "a && b"'
+    assert detector._iter_unquoted_segment_bounds(quoted) == ((0, len(quoted)),)
+    escaped_line = 'echo \\"x\\" && y'
+    escaped = detector._iter_unquoted_segment_bounds(escaped_line)
+    assert len(escaped) == 2
+    assert escaped_line[escaped[1][0] : escaped[1][1]].strip() == "y"
+    single = "echo 'a | b' ; c"
+    bounds = detector._iter_unquoted_segment_bounds(single)
+    assert bounds[-1][1] == len(single)
+    assert single[bounds[0][0] : bounds[0][1]].startswith("echo")
+    assert detector._executable_command_match("", detector._VERCEL_DEPLOY_COMMAND) is None
+    assert detector._executable_command_match("vercel ls", detector._VERCEL_DEPLOY_COMMAND) is None
+    match = detector._executable_command_match(
+        "vercel deploy",
+        detector._VERCEL_DEPLOY_COMMAND,
+    )
+    assert match is not None
+    assert match.group(0).lower() == "vercel deploy"

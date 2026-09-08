@@ -24,7 +24,8 @@ Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
 deployment-write command findings. Hook or manifest ``terraform apply``
 and ``helm install`` fail closed as infra-write command findings.
 Hook or manifest ``vercel deploy`` and ``fly deploy`` fail closed as
-hosted-deploy command findings.
+hosted-deploy command findings. Unquoted ``#`` comments and
+``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, and ``fly status``
 stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
@@ -383,6 +384,8 @@ _TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
 _HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
 _VERCEL_DEPLOY_COMMAND = re.compile(r"\bvercel\s+deploy\b", re.IGNORECASE)
 _FLY_DEPLOY_COMMAND = re.compile(r"\b(?:fly|flyctl)\s+deploy\b", re.IGNORECASE)
+_REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
+_FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
     re.IGNORECASE,
@@ -1635,6 +1638,158 @@ def _helm_install_command_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
+def _unquoted_hash_index(line: str) -> int | None:
+    """Return the index of an unquoted ``#`` shell comment, if any.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        The comment index, or ``None`` when every ``#`` is quoted or escaped.
+    """
+    in_single = False
+    in_double = False
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if char == "#" and not in_single and not in_double:
+            return index
+    return None
+
+
+def _iter_unquoted_segment_bounds(line: str) -> tuple[tuple[int, int], ...]:
+    """Return start/end offsets of unquoted shell command segments.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        Inclusive-start exclusive-end spans split on unquoted ``&&``,
+        ``||``, ``;``, ``|``, and ``&``. Quoted lookalikes stay one span.
+    """
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    in_single = False
+    in_double = False
+    escaped = False
+    length = len(line)
+    index = 0
+    while index < length:
+        char = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            index += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            index += 1
+            continue
+        if in_single or in_double:
+            index += 1
+            continue
+        two = line[index : index + 2]
+        if two in {"&&", "||"}:
+            bounds.append((start, index))
+            start = index + 2
+            index += 2
+            continue
+        if char in {";", "|", "&"}:
+            bounds.append((start, index))
+            start = index + 1
+            index += 1
+            continue
+        index += 1
+    bounds.append((start, length))
+    return tuple(bounds)
+
+
+def _first_shell_token(segment: str) -> str:
+    """Return the first command basename of a shell segment.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        A lowercase basename such as ``echo``. Empty when the fragment
+        has no command token.
+    """
+    match = _FIRST_SHELL_TOKEN.match(segment)
+    if match is None:
+        return ""
+    name = match.group(1).rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name.lower()
+
+
+def _is_reporting_builtin_segment(segment: str) -> bool:
+    """Return whether the segment only prints text instead of running a CLI.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        ``True`` for ``echo``, ``printf``, and ``print``, including path
+        and ``.exe`` spellings.
+    """
+    return _first_shell_token(segment) in _REPORTING_BUILTINS
+
+
+def _executable_command_match(
+    content: str, pattern: re.Pattern[str]
+) -> re.Match[str] | None:
+    """Return the first regex match that is an executable command context.
+
+    Unquoted ``#`` comments and ``echo``/``printf``/``print`` segments are
+    not executable. Manifest JSON command strings remain searchable
+    because they are not reporting builtins.
+
+    Args:
+        content: Hook or manifest text.
+        pattern: Compiled command regex.
+
+    Returns:
+        The first executable match, or ``None``.
+    """
+    if not content:
+        return None
+    for match in pattern.finditer(content):
+        line_start = content.rfind("\n", 0, match.start()) + 1
+        line_end = content.find("\n", match.start())
+        if line_end < 0:
+            line_end = len(content)
+        line = content[line_start:line_end]
+        relative = match.start() - line_start
+        comment_at = _unquoted_hash_index(line)
+        if comment_at is not None and relative >= comment_at:
+            continue
+        for start, end in _iter_unquoted_segment_bounds(line):
+            if start <= relative < end:
+                if not _is_reporting_builtin_segment(line[start:end]):
+                    return match
+                break
+    return None
+
+
 def _vercel_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
     """Return ``vercel deploy`` findings with a command label, not tokens.
 
@@ -1642,10 +1797,11 @@ def _vercel_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
         content: Hook or manifest text.
 
     Returns:
-        One hit when ``vercel deploy`` is present. ``vercel ls`` and
-        README wording are not this class.
+        One hit when an executable ``vercel deploy`` is present.
+        ``vercel ls``, README wording, hook comments, and echo/printf
+        lookalikes are not this class.
     """
-    match = _VERCEL_DEPLOY_COMMAND.search(content)
+    match = _executable_command_match(content, _VERCEL_DEPLOY_COMMAND)
     if match is None:
         return ()
     return (
@@ -1665,10 +1821,11 @@ def _fly_deploy_command_hits(content: str) -> tuple[PluginHit, ...]:
         content: Hook or manifest text.
 
     Returns:
-        One hit for ``fly deploy`` or ``flyctl deploy``.
-        ``fly status`` is not this class.
+        One hit for executable ``fly deploy`` or ``flyctl deploy``.
+        ``fly status``, hook comments, and echo/printf lookalikes are
+        not this class.
     """
-    match = _FLY_DEPLOY_COMMAND.search(content)
+    match = _executable_command_match(content, _FLY_DEPLOY_COMMAND)
     if match is None:
         return ()
     return (

@@ -136,7 +136,9 @@
   ``helm install`` fails as `claude-plugin-helm-install-command`.
   ``vercel deploy`` fails as `claude-plugin-vercel-deploy-command`.
   ``fly deploy`` and ``flyctl deploy`` fail as
-  `claude-plugin-fly-deploy-command`. ``terraform plan``, ``helm list``,
+  `claude-plugin-fly-deploy-command`. Hook comments and
+  ``echo``/``printf`` lookalikes are not those classes.
+  ``terraform plan``, ``helm list``,
   ``vercel ls``, and ``fly status``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
