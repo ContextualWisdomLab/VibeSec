@@ -63,6 +63,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import tarfile
 from typing import Final, Iterable
@@ -1710,7 +1711,15 @@ def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
         if isinstance(value, dict):
             for key, nested in value.items():
                 if key == "command" and isinstance(nested, str) and nested.strip():
-                    found.append((nested, _script_line(content, nested)))
+                    args = value.get("args")
+                    command = nested
+                    if isinstance(args, list) and all(
+                        isinstance(argument, str) for argument in args
+                    ):
+                        command = " ".join(
+                            (nested, *(shlex.quote(argument) for argument in args))
+                        )
+                    found.append((command, _script_line(content, nested)))
                 else:
                     collect(nested)
         elif isinstance(value, list):
