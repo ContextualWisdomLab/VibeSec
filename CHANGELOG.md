@@ -7,6 +7,7 @@
 - 대시보드 검색창 커서 유지 — 검색어 중간에서 텍스트를 수정할 때마다 커서가 검색어의 맨 끝으로 점프하는 불편함을 수정했습니다. 이제 입력창의 커서 위치(`selectionStart`/`selectionEnd`)가 동적 렌더링 이후에도 원래 위치에 정확히 유지되어 자연스러운 타이핑 경험을 제공합니다.
 
 ### 보안
+- Claude plugin 구조화 argv 검출 보강 — JSON manifest의 `command`와 sibling `args`를 하나의 직접 실행 경계로 검증하여 `terraform apply`·`helm install` 우회를 차단합니다. Wrapper/reporting executable, near-verb, 공백 포함 단일 인자, 비배열·혼합형 `args`는 실행으로 추정하지 않으며 기존 shell-string 명령은 그대로 보존합니다.
 - Claude plugin 실행 명령 경계 보강 — quoted CLI 이름(`"deno" publish`, `'pod' trunk push`)을 실제 registry write로 검출하고, quoted near-task suffix는 capability 오탐에서 제외합니다. 공통 parser는 `:`·`true`·`false`의 인자를 실행 명령으로 오인하지 않으며, 뒤따르는 실제 명령은 계속 검출합니다.
 - Claude plugin sbt publish 검출 보강 — `sbt "publish"`·`sbt 'publishSigned'`과 `$(...)`/backtick 안의 인용 task도 실제 repository write로 검출합니다. `publishLocal`, assignment·reporting prose, 닫힌 here-document payload는 계속 negative입니다.
 - Claude plugin 실행 명령 문맥 정밀화 — 닫힌 literal here-document 본문의 `terraform apply`/`helm install` 같은 문자열은 데이터로 취급해 HIGH 오탐을 제거했습니다. 인용 delimiter와 `<<-` 탭 제거 형식을 지원하며, 닫히지 않거나 모호한 형식은 fail-closed로 유지합니다. 종료 delimiter 뒤의 실제 명령과 인용/주석 opener 유사 문자열 뒤의 실제 명령은 계속 검출합니다.
