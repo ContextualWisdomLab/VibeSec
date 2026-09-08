@@ -271,6 +271,30 @@ def test_nested_shell_c_payloads_fail_admission() -> None:
 
         assert expected_rule in rule_ids
 
+    for option in (
+        "-ac",
+        "-bc",
+        "-hc",
+        "-kc",
+        "-mc",
+        "-pc",
+        "-tc",
+        "-Bc",
+        "-Cc",
+        "-Ec",
+        "-Hc",
+        "-Pc",
+        "-Tc",
+    ):
+        body = f"#!/bin/sh\nbash {option} 'terraform apply'\n"
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
+
+    for option in ("--debug", "--debugger", "--noediting", "--pretty-print"):
+        body = f"#!/bin/sh\nbash {option} -c 'terraform apply'\n"
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
+
 
 def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
     """Shell-string and direct-argv manifest payloads use the same boundary."""
@@ -294,6 +318,35 @@ def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
         hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
 
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+    bash_options = (
+        "-ac",
+        "-bc",
+        "-hc",
+        "-kc",
+        "-mc",
+        "-pc",
+        "-tc",
+        "-Bc",
+        "-Cc",
+        "-Ec",
+        "-Hc",
+        "-Pc",
+        "-Tc",
+        "--debug",
+        "--debugger",
+        "--noediting",
+        "--pretty-print",
+    )
+    for option in bash_options:
+        args = [option, "terraform apply"]
+        if option.startswith("--"):
+            args.insert(1, "-c")
+        content = json.dumps(
+            {"mcpServers": {"writer": {"command": "bash", "args": args}}}
+        )
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
 
 
 def test_nested_shell_c_payload_boundaries_stay_negative() -> None:
