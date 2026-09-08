@@ -324,3 +324,14 @@ def test_command_after_here_document_still_fails() -> None:
     assert _TERRAFORM_RULE not in rule_ids
     assert _HELM_RULE in rule_ids
 
+
+def test_heredoc_opener_lookalikes_do_not_hide_real_commands() -> None:
+    """Quoted or commented opener text cannot suppress a later real command."""
+    bodies = (
+        '#!/bin/sh\necho "<<EOF"\nterraform apply -auto-approve\n',
+        "#!/bin/sh\n# cat <<EOF\nhelm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
