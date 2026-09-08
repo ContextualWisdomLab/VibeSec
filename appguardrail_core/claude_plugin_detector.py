@@ -34,7 +34,9 @@ writes. Hook or manifest ``npm publish``, ``twine upload``, and
 Hook or manifest ``pnpm publish``, ``uv publish``, and
 ``poetry publish`` fail closed as alternate-manager registry writes.
 Hook or manifest ``gem push`` and ``nuget push`` fail closed as
-RubyGems and NuGet registry writes.
+RubyGems and NuGet registry writes. Hook or manifest ``dart pub
+publish``, ``flutter pub publish``, and ``pub publish`` fail closed
+as pub.dev registry writes.
 Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
@@ -356,6 +358,11 @@ CLAUDE_PLUGIN_NUGET_PUSH_COMMAND_MESSAGE: Final = (
     "is write authority on NuGet. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_PUB_PUBLISH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs dart pub publish. Publishing a "
+    "package is write authority on pub.dev. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -505,6 +512,10 @@ _POETRY_PUBLISH_COMMAND = re.compile(r"\bpoetry\s+publish\b", re.IGNORECASE)
 _GEM_PUSH_COMMAND = re.compile(r"\bgem\s+push\b", re.IGNORECASE)
 _NUGET_PUSH_COMMAND = re.compile(
     r"\b(?:dotnet\s+)?nuget\s+push\b",
+    re.IGNORECASE,
+)
+_PUB_PUBLISH_COMMAND = re.compile(
+    r"\b(?:(?P<sdk>dart|flutter)\s+)?pub\s+publish\b",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
@@ -795,7 +806,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
             r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
             r"uv\s+publish|poetry\s+publish|gem\s+push|"
-            r"(?:dotnet\s+)?nuget\s+push)\b",
+            r"(?:dotnet\s+)?nuget\s+push|"
+            r"(?:dart\s+|flutter\s+)?pub\s+publish)\b",
             re.IGNORECASE,
         ),
     ),
@@ -1023,6 +1035,7 @@ def inspect_claude_plugin_file(
         hits.extend(_poetry_publish_command_hits(content, manifest=manifest))
         hits.extend(_gem_push_command_hits(content, manifest=manifest))
         hits.extend(_nuget_push_command_hits(content, manifest=manifest))
+        hits.extend(_pub_publish_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2520,6 +2533,40 @@ def _nuget_push_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="nuget push",
                 message=CLAUDE_PLUGIN_NUGET_PUSH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _pub_publish_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``pub publish`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``dart pub publish``, ``flutter pub
+        publish``, or legacy ``pub publish``. ``dart pub get`` is not
+        this class. ``pnpm publish`` stays the pnpm class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _PUB_PUBLISH_COMMAND)
+        if match is None:
+            continue
+        sdk = match.group("sdk")
+        if sdk:
+            snippet = sdk.lower() + " pub publish"
+        else:
+            snippet = "pub publish"
+        return (
+            PluginHit(
+                rule_id="claude-plugin-pub-publish-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet=snippet,
+                message=CLAUDE_PLUGIN_PUB_PUBLISH_COMMAND_MESSAGE,
             ),
         )
     return ()

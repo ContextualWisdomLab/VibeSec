@@ -162,6 +162,8 @@
   `claude-plugin-npm-publish-command`. ``gem push`` fails as
   `claude-plugin-gem-push-command`. ``nuget push`` and
   ``dotnet nuget push`` fail as `claude-plugin-nuget-push-command`.
+  ``dart pub publish``, ``flutter pub publish``, and ``pub publish``
+  fail as `claude-plugin-pub-publish-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
