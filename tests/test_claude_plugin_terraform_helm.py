@@ -250,6 +250,11 @@ def test_nested_shell_c_payloads_fail_admission() -> None:
             "#!/bin/sh\nTF_IN_AUTOMATION=1 bash -ec 'terraform apply'\n",
             _TERRAFORM_RULE,
         ),
+        ("#!/bin/sh\nbash -e -c 'terraform apply'\n", _TERRAFORM_RULE),
+        (
+            "#!/bin/sh\nbash --noprofile -c 'helm install app chart/'\n",
+            _HELM_RULE,
+        ),
         (
             "#!/bin/sh\necho checked; sh -c 'echo ok && terraform apply'\n",
             _TERRAFORM_RULE,
@@ -268,6 +273,11 @@ def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
         {"command": "bash -c 'terraform apply -auto-approve'"},
         {"command": "bash", "args": ["-c", "helm install app chart/"]},
         {"command": "/bin/sh", "args": ["-lc", "terraform apply"]},
+        {"command": "bash", "args": ["-e", "-c", "terraform apply"]},
+        {
+            "command": "bash",
+            "args": ["--noprofile", "-c", "helm install app chart/"],
+        },
     )
     for manifest in manifests:
         content = json.dumps({"mcpServers": {"writer": manifest}})
@@ -288,6 +298,10 @@ def test_nested_shell_c_payload_boundaries_stay_negative() -> None:
         "#!/bin/sh\nsh -c 'terraform plan'\n",
         "#!/bin/sh\nsh -c 'helm install-chart app chart/'\n",
         "#!/bin/sh\necho ok # ; sh -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -C 'terraform apply'\n",
+        "#!/bin/sh\nbash -gc 'terraform apply'\n",
+        "#!/bin/sh\nbash -g -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -o pipefail -c 'terraform apply'\n",
     )
     for body in hook_bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
@@ -301,6 +315,10 @@ def test_nested_shell_c_payload_boundaries_stay_negative() -> None:
         {"command": "echo", "args": ["sh", "-c", "terraform apply"]},
         {"command": "wrapper", "args": ["bash", "-c", "helm install"]},
         {"command": "bash", "args": ["-c", "terraform apply", 1]},
+        {"command": "bash", "args": ["-C", "terraform apply"]},
+        {"command": "bash", "args": ["-gc", "terraform apply"]},
+        {"command": "bash", "args": ["-g", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["-o", "pipefail", "-c", "terraform apply"]},
     )
     for manifest in manifests:
         content = json.dumps({"mcpServers": {"reader": manifest}})
