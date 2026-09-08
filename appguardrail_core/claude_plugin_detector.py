@@ -43,6 +43,8 @@ instruction-override family. Setuid, setgid, or world-writable executable
 and hook files fail admission. Zip or tar members whose uncompressed size
 divided by compressed size exceeds the bounded ratio, or nested archives
 beyond a small depth, fail admission without extracting the payload.
+Materialized files and archive members nested beyond a bounded path
+component depth fail admission as excessive path depth.
 A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
 not hook scans. A first-party ``SHA256SUMS``, ``SHA256SUMS.txt``,
@@ -188,6 +190,12 @@ CLAUDE_PLUGIN_CONCEALED_IDENTITY_MESSAGE: Final = (
 CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
     "Claude plugin package exceeds the bounded file count or scanned byte "
     "budget. Hostile oversized trees fail admission. "
+    "[CWE-400 - Uncontrolled Resource Consumption]"
+)
+CLAUDE_PLUGIN_EXCESSIVE_PATH_DEPTH_MESSAGE: Final = (
+    "Claude plugin tree or archive member nests directories beyond the "
+    "bounded path depth. Deep recursion fails admission and is not "
+    "extracted. "
     "[CWE-400 - Uncontrolled Resource Consumption]"
 )
 CLAUDE_PLUGIN_DECOMPRESSION_BOMB_MESSAGE: Final = (
@@ -357,6 +365,7 @@ _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
 _MAX_ARCHIVE_COMPRESSION_RATIO: Final = 100
 _MAX_ARCHIVE_NESTING_DEPTH: Final = 1
+_MAX_PATH_DEPTH: Final = 32
 _CONCEALED_CHAR = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200d\u202a-\u202e\u2066-\u2069]"
 )
@@ -980,6 +989,8 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         class. Vendored trees are one scope finding. A matching checksum
         file, comments-only checksum file, or missing checksum file is
         not a finding. Cosign or GPG signatures are not required.
+        Files or archive members nested beyond ``_MAX_PATH_DEPTH``
+        components fail as excessive path depth.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -1012,6 +1023,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         hits.extend(_license_mismatch_hits(root, {}))
     hits.extend(_checksum_mismatch_hits(root))
     hits.extend(_unsigned_checksum_hits(root))
+    hits.extend(_excessive_path_depth_hits(root))
     _, file_count, scanned_byte_count = _artifact_digest(root)
     if file_count > _MAX_PACKAGE_FILES or scanned_byte_count > _MAX_PACKAGE_BYTES:
         hits.append(
@@ -1088,19 +1100,24 @@ def inspect_claude_plugin_archive(
         extract_root: Bounded destination root.
 
     Returns:
-        Path-traversal and decompression-bomb hits. Empty when every
-        member stays inside the root, stays within the ratio/depth/byte
-        bounds, or ``archive_path`` is not a readable archive. Secret
-        literals and raw archive bytes never appear in snippets.
+        Path-traversal, decompression-bomb, and excessive-path-depth
+        hits. Empty when every member stays inside the root, stays
+        within the ratio/nesting/byte/path-depth bounds, or
+        ``archive_path`` is not a readable archive. Secret literals and
+        raw archive bytes never appear in snippets. Deep members are
+        never extracted.
     """
     hits, safe_members = _classify_archive_members(archive_path, extract_root)
     bomb_hits = _inspect_archive_decompression_bombs(archive_path, extract_root)
     budget_hits = _archive_aggregate_budget_hits(archive_path, extract_root)
+    depth_hits = _archive_member_path_depth_hits(archive_path, extract_root)
     if bomb_hits or budget_hits:
-        return (*hits, *bomb_hits, *budget_hits)
+        return (*hits, *bomb_hits, *budget_hits, *depth_hits)
     for name in safe_members:
+        if _path_exceeds_max_depth(name):
+            continue
         _extract_archive_member(archive_path, name, extract_root)
-    return hits
+    return (*hits, *depth_hits)
 
 
 def build_claude_plugin_scan_receipt(
@@ -3035,6 +3052,109 @@ def _plugin_sbom_sha256(root: Path) -> str:
             separators=(",", ":"),
         ).encode()
     )
+
+
+def _path_component_count(relative: str) -> int:
+    """Return the number of non-empty path components in ``relative``.
+
+    Args:
+        relative: A POSIX or mixed-separator path.
+
+    Returns:
+        Component count after dropping empty parts and ``.``. ``/`` and
+        ``./`` are zero.
+    """
+    cleaned = relative.replace("\\", "/").strip("/")
+    if not cleaned:
+        return 0
+    return len([part for part in cleaned.split("/") if part and part != "."])
+
+
+def _path_exceeds_max_depth(relative: str) -> bool:
+    """Return whether ``relative`` nests past ``_MAX_PATH_DEPTH``.
+
+    Args:
+        relative: A POSIX or mixed-separator path.
+
+    Returns:
+        ``True`` when the component count is greater than the bound.
+    """
+    return _path_component_count(relative) > _MAX_PATH_DEPTH
+
+
+def _excessive_path_depth_hit(relative: str, display_file: str | None = None) -> PluginHit:
+    """Return one excessive-path-depth finding with a sanitized label.
+
+    Args:
+        relative: Offending relative path.
+        display_file: Optional archive path recorded on the hit.
+
+    Returns:
+        One finding. Snippets never include secrets or bidi.
+    """
+    return PluginHit(
+        rule_id="claude-plugin-excessive-path-depth",
+        line=1,
+        snippet="nested-path",
+        message=CLAUDE_PLUGIN_EXCESSIVE_PATH_DEPTH_MESSAGE,
+        file=display_file,
+    )
+
+
+def _archive_member_path_depth_hits(
+    archive_path: Path, extract_root: Path
+) -> tuple[PluginHit, ...]:
+    """Return one depth finding for the first too-deep in-root member.
+
+    Args:
+        archive_path: Candidate zip or tar file.
+        extract_root: Bounded destination used to skip zip-slip names.
+
+    Returns:
+        At most one hit. Traversal names stay the traversal class.
+        Members are not extracted.
+    """
+    names, opened = _archive_member_names(archive_path)
+    if not opened:
+        return ()
+    display = _archive_display_path(archive_path, extract_root)
+    for name in names:
+        if _archive_member_escapes(name, extract_root):
+            continue
+        if _path_exceeds_max_depth(name):
+            return (_excessive_path_depth_hit(name, display),)
+    return ()
+
+
+def _excessive_path_depth_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return bounded depth findings for a materialized plugin tree.
+
+    Args:
+        root: Plugin scan root.
+
+    Returns:
+        One tree finding for the first too-deep regular file or symlink,
+        plus at most one finding per archive. Zip-slip members stay
+        traversal. Nested zip/tar members stay decompression-bomb.
+    """
+    hits: list[PluginHit] = []
+    tree_hit = False
+    for path in _walk_entries(root):
+        try:
+            relative = path.relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        if not tree_hit and _path_exceeds_max_depth(relative):
+            hits.append(_excessive_path_depth_hit(relative, relative))
+            tree_hit = True
+            continue
+        try:
+            is_archive = path.is_file() and not path.is_symlink() and _is_archive_path(path)
+        except OSError:
+            continue
+        if is_archive:
+            hits.extend(_archive_member_path_depth_hits(path, root))
+    return tuple(hits)
 
 
 def _walk_entries(root: Path) -> tuple[Path, ...]:

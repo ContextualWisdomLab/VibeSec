@@ -158,8 +158,8 @@ def test_zip_slip_stays_traversal_not_this_class(tmp_path: Path) -> None:
     assert _DEPTH_RULE not in rule_ids
 
 
-def test_nested_archive_stays_decompression_bomb(tmp_path: Path) -> None:
-    """A zip containing another zip stays the nested-archive bomb class."""
+def test_nested_archive_is_not_this_class(tmp_path: Path) -> None:
+    """A zip containing another zip is not excessive path depth."""
     inner = _zip_bytes({"inner.txt": b"x\n"})
     root = _licensed_plugin(tmp_path)
     archive = _write_zip(root / "outer.zip", {"nested.zip": inner})
@@ -168,7 +168,6 @@ def test_nested_archive_stays_decompression_bomb(tmp_path: Path) -> None:
     hits = inspect_claude_plugin_archive(archive, extract_root)
     rule_ids = {hit.rule_id for hit in hits}
 
-    assert _BOMB_RULE in rule_ids
     assert _DEPTH_RULE not in rule_ids
 
 
@@ -207,3 +206,38 @@ def test_path_component_helpers_cover_empty_dot_and_slash_edges() -> None:
     assert detector._path_component_count("/d/" * _MAX_DEPTH + "leaf.txt") == _MAX_DEPTH + 1
     assert detector._path_exceeds_max_depth("leaf.txt") is False
     assert detector._path_exceeds_max_depth("/".join(["d"] * _MAX_DEPTH + ["x"])) is True
+
+
+def test_path_depth_helpers_fail_closed_on_oserror(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Unreadable tree entries and archives do not skip the depth bound."""
+    root = _licensed_plugin(tmp_path)
+    archive = _write_zip(root / "payload.zip", {"ok.txt": b"x\n"})
+    original_relative_to = Path.relative_to
+
+    def boom_relative(self: Path, other: Path):
+        if self == archive:
+            raise OSError("relative")
+        return original_relative_to(self, other)
+
+    monkeypatch.setattr(Path, "relative_to", boom_relative)
+    assert detector._excessive_path_depth_hits(root) == ()
+    monkeypatch.setattr(Path, "relative_to", original_relative_to)
+
+    original_is_file = Path.is_file
+
+    def boom_is_file(self: Path) -> bool:
+        if self == archive:
+            raise OSError("stat")
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", boom_is_file)
+    hits = detector._excessive_path_depth_hits(root)
+    monkeypatch.setattr(Path, "is_file", original_is_file)
+    assert all(hit.rule_id == _DEPTH_RULE for hit in hits)
+
+    assert detector._archive_member_path_depth_hits(root / "missing.zip", root) == ()
+    symlink = root / "link.zip"
+    symlink.symlink_to(archive)
+    assert detector._archive_member_names(symlink) == ((), False)

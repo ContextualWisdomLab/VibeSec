@@ -95,7 +95,9 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-checksum-mismatch` when a first-party checksum file
   disagrees with artifact bytes on disk,
   `claude-plugin-unsigned-checksum` when digest rows have no sibling
-  signature file, `claude-plugin-github-merge-command`
+  signature file, `claude-plugin-excessive-path-depth` when a
+  materialized file or archive member nests past 32 path components,
+  `claude-plugin-github-merge-command`
   for hook or manifest ``gh pr merge``,
   `claude-plugin-github-release-command` for ``gh release``
   create/upload/delete/edit,
