@@ -263,7 +263,7 @@ def test_quoted_sbt_task_in_substitution_still_fails() -> None:
     """Quoted sbt publish tasks inside shell substitutions remain executable."""
     bodies = (
         '#!/bin/sh\nresult=$(sbt "publishSigned")\n',
-        "#!/bin/sh\nresult=\`sbt 'publish'\`\n",
+        "#!/bin/sh\nresult=`sbt 'publish'`\n",
     )
     for body in bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
