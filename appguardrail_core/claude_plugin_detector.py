@@ -602,12 +602,14 @@ _CONAN_UPLOAD_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _DENO_PUBLISH_COMMAND = re.compile(
-    r"\bdeno[ \t]+(?P<quote>['\"]?)publish(?P=quote)"
+    r"(?<![A-Za-z0-9_])(?P<cli_quote>['\"]?)deno(?P=cli_quote)"
+    r"[ \t]+(?P<quote>['\"]?)publish(?P=quote)"
     r"(?=$|[ \t;&|`\)])",
     re.IGNORECASE,
 )
 _POD_TRUNK_PUSH_COMMAND = re.compile(
-    r"\bpod[ \t]+(?P<trunk_quote>['\"]?)trunk(?P=trunk_quote)"
+    r"(?<![A-Za-z0-9_])(?P<cli_quote>['\"]?)pod(?P=cli_quote)"
+    r"[ \t]+(?P<trunk_quote>['\"]?)trunk(?P=trunk_quote)"
     r"[ \t]+(?P<push_quote>['\"]?)push(?P=push_quote)"
     r"(?=$|[ \t;&|`\)])",
     re.IGNORECASE,
@@ -897,7 +899,7 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
     (
         "package_install",
         re.compile(
-            r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
+            r"(?<![A-Za-z0-9_])(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
             r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
             r"uv\s+publish|poetry\s+publish|gem\s+push|"
             r"(?:dotnet\s+)?nuget\s+push|"
@@ -910,8 +912,10 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
             r"luarocks\s+upload|"
             r"sbt\s+publish(?:Signed)?|"
             r"conan\s+upload|"
-            r"deno[ \t]+(?:publish|\"publish(?=\")|'publish(?='))|"
-            r"pod[ \t]+(?:trunk|\"trunk\"|'trunk')[ \t]+"
+            r"(?:deno|\"deno\"|'deno')[ \t]+"
+            r"(?:publish|\"publish(?=\")|'publish(?='))|"
+            r"(?:pod|\"pod\"|'pod')[ \t]+"
+            r"(?:trunk|\"trunk\"|'trunk')[ \t]+"
             r"(?:push|\"push(?=\")|'push(?=')))\b",
             re.IGNORECASE,
         ),
