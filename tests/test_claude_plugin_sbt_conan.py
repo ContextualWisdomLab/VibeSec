@@ -258,3 +258,14 @@ def test_quoted_sbt_publish_tasks_fail_admission() -> None:
             hit.rule_id == _SBT_RULE and hit.snippet == snippet for hit in hits
         )
 
+
+def test_quoted_sbt_task_in_substitution_still_fails() -> None:
+    """Quoted sbt publish tasks inside shell substitutions remain executable."""
+    bodies = (
+        '#!/bin/sh\nresult=$(sbt "publishSigned")\n',
+        "#!/bin/sh\nresult=\`sbt 'publish'\`\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id == _SBT_RULE for hit in hits)
+
