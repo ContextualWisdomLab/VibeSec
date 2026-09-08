@@ -120,6 +120,7 @@ files being scanned, then applies the union of relevant checks. Examples:
   `claude-plugin-poetry-publish-command` for ``poetry publish``,
   `claude-plugin-gem-push-command` for ``gem push``,
   `claude-plugin-nuget-push-command` for ``nuget push``,
+  `claude-plugin-pub-publish-command` for ``dart pub publish``,
   and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
