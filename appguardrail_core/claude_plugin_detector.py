@@ -2041,31 +2041,26 @@ def _is_literal_s3_download(
 def _aws_s3_write_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return ``aws s3 sync``/``cp`` findings with a command label, not URIs.
-
-    Args:
-        content: Hook or manifest text.
-        manifest: When true, only structural command values are scanned.
-
-    Returns:
-        One hit for executable ``aws s3 sync`` or ``aws s3 cp``.
-        ``aws s3 ls``, comments, and echo lookalikes are not this class.
-    """
+    """Return S3-destination write findings without copying operand URIs."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _AWS_S3_WRITE_COMMAND)
-        if match is None:
-            continue
-        if _is_literal_s3_download(source, match):
-            continue
-        verb = match.group("verb").lower()
-        return (
-            PluginHit(
-                rule_id="claude-plugin-aws-s3-write-command",
-                line=first_line + source[: match.start()].count("\n"),
-                snippet="aws s3 " + verb,
-                message=CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE,
-            ),
-        )
+        search_from = 0
+        while search_from < len(source):
+            fragment = source[search_from:]
+            match = _executable_command_match(fragment, _AWS_S3_WRITE_COMMAND)
+            if match is None:
+                break
+            absolute_start = search_from + match.start()
+            if not _is_literal_s3_download(fragment, match):
+                verb = match.group("verb").lower()
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-aws-s3-write-command",
+                        line=first_line + source[:absolute_start].count("\n"),
+                        snippet="aws s3 " + verb,
+                        message=CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE,
+                    ),
+                )
+            search_from += match.end()
     return ()
 
 
