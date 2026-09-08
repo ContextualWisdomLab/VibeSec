@@ -106,10 +106,6 @@ class RuleMetadata:
 
 def extract_public_references(message: str) -> tuple[str, ...]:
     """Extract OWASP, CWE, and CVE references already embedded in rule copy."""
-    # ⚡ Bolt: Fast path to skip expensive regex evaluation for the vast majority of findings.
-    # Impact: Reduces execution time for non-matching strings from ~5us to ~0.7us.
-    if not message or "[" not in message:
-        return ()
     return tuple(
         dict.fromkeys(
             " ".join(match.group(1).split())
