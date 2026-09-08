@@ -219,3 +219,15 @@ def test_cloudformation_deploy_stays_the_aws_deploy_class() -> None:
     rule_ids = {hit.rule_id for hit in hits}
     assert _AWS_DEPLOY_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
+
+
+def test_download_before_later_upload_still_fails_admission() -> None:
+    """A safe first command cannot hide a later S3 destination write."""
+    body = (
+        "#!/bin/sh\n"
+        "aws s3 cp s3://bucket/input.tgz ./input.tgz && "
+        "aws s3 cp ./output.tgz s3://bucket/output.tgz\n"
+    )
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    assert any(hit.rule_id == _S3_RULE for hit in hits)
+
