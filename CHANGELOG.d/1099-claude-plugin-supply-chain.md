@@ -174,8 +174,9 @@
   `claude-plugin-luarocks-upload-command`. ``sbt publish`` and
   ``sbt publishSigned`` fail as `claude-plugin-sbt-publish-command`.
   ``conan upload`` fails as `claude-plugin-conan-upload-command`.
-  ``deno publish`` fails as `claude-plugin-deno-publish-command`.
-  ``pod trunk push`` fails as `claude-plugin-pod-trunk-push-command`.
+  Quoted or unquoted exact ``deno publish`` tasks fail as
+  `claude-plugin-deno-publish-command`. Quoted or unquoted exact
+  ``pod trunk push`` tasks fail as `claude-plugin-pod-trunk-push-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
