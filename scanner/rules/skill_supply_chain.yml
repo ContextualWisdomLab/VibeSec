@@ -40,7 +40,7 @@ rules:
 
   - id: skill-doc-exfiltration-endpoint-directive
     patterns:
-      - pattern-regex: '(?i)(send|post|exfiltrate|upload)[^\n]{0,60}(all )?(file contents|secrets|credentials|tokens)[^\n]{0,40}https?://'
+      - pattern-regex: '(?i)(send|post|exfiltrate|upload)(?:[^\n]{0,60}(all )?(file contents|secrets|credentials|tokens)[^\n]{0,40}https?://|[^\n]{0,40}https?://[^\n]{0,60}(all )?(file contents|secrets|credentials|tokens))'
     message: |
       Skill documentation directs the agent to transmit file contents or
       credentials to a remote endpoint. This is data-exfiltration wording, not
