@@ -152,6 +152,19 @@ Every retained security defect must record:
 
 Where regex families need path reachability, mutable state, shell semantics, or increasingly incompatible adjacency exceptions, stop treating another regular expression as the default answer. Preserve existing rule IDs and corpus as migration oracles and move the shared causal state into an executable structural analyzer.
 
+## Assurance state mapping
+
+The candidate `appguardrail.scan-assurance.v1` contract has one authoritative result field, `scan_outcome_code`: `clean`, `findings_present`, `incomplete`, `failed`, or `untrusted`. Source lifecycle labels are not aliases for that field. `appguardrail.scan-evidence.v1.execution` accepts `completed`, `failed`, or `incomplete`; requested external engines accept `completed`, `unavailable`, `failed`, or `not_requested`.
+
+| Observed evidence condition | Canonical assurance mapping | Required consumer behavior |
+| --- | --- | --- |
+| all required evidence is current, identity/digest-valid and complete | `clean` only when finding count is zero; otherwise `findings_present` | dashboard may render `Clean Scan` only for `clean`; deploy gate applies its finding threshold to `findings_present` |
+| missing, queued, running, cancelled, unavailable, inconclusive, stale, incomplete execution, incomplete detector set, or a requested engine not completed | `incomplete` with a reason preserving the source condition; `inconclusive` maps to `incomplete`, never `clean` | JSON/report/dashboard show incomplete; SARIF records the outcome in run properties; deploy gate fails closed |
+| scanner or requested-engine execution failed | `failed` | preserve failure rather than collapsing it into no findings; deploy gate fails closed |
+| malformed evidence, repository/commit/digest/count mismatch, future timestamp, or invalid provenance | `untrusted` | reject the assurance claim; deploy gate fails closed |
+
+Dashboard, JSON, SARIF, reports, and deploy gates must consume `scan_outcome_code` from the same assurance envelope. If orchestration has only a lifecycle condition and cannot produce a valid envelope, it must synthesize the corresponding non-clean result at its boundary or withhold a clean result; omission is never `clean`.
+
 ## Buyer-visible Gap register
 
 | ID | Buyer-visible Gap | Current evidence | Smallest valuable slice | Exit evidence | Status |
@@ -171,7 +184,7 @@ Where regex families need path reachability, mutable state, shell semantics, or 
 - GitHub Actions polling analysis must distinguish per-request transport budgets from total control-flow bounds, preserve job/run/loop locality, model branch and exit reachability, distinguish executable commands from quoted/comment text, and account for selected shell/fail-fast semantics before using shell errors as safety or vulnerability evidence.
 - Safety state is causal, not nominal: initialization must precede the candidate loop; deadlines/limits/counters must converge; state in sibling/earlier loops cannot sanitize another loop; textual `exit` is not safety evidence when a prior unconditional transfer makes it unreachable; an independent monotonic total bound must remain authoritative even if a non-owning retry counter resets.
 - URL-validation tests that prove a public resolved hostname must control DNS deterministically. Reserved/example hostnames are not evidence that production should accept unresolved destinations.
-- Missing/queued/failed/stale/cancelled/unavailable evidence are distinct typed states. A required workflow `startup_failure` with zero jobs is control-plane/infrastructure evidence, not a source-test success or failure and never transfers from another head.
+- Missing, queued, running, stale, cancelled, unavailable, inconclusive and failed source conditions remain distinct provenance/reason values even when the assurance mapping groups them into `incomplete`, `failed`, or `untrusted`. A required workflow `startup_failure` with zero jobs is control-plane/infrastructure evidence, not a source-test success or failure and never transfers from another head.
 - AppGuardrail is security tooling, not mathematical-science code. Rust/native work requires measured isolation/performance justification and a versioned boundary rather than language preference alone.
 - Any future database changes use normalized tenant ownership, descriptive identifiers, migration rollback and measured locking/partition strategy; this document introduces no schema.
 
