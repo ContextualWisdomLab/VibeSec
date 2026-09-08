@@ -2037,32 +2037,56 @@ def _az_deploy_command_hits(
     return ()
 
 
+def _is_literal_s3_download(
+    content: str, match: re.Match[str]
+) -> bool:
+    """Return whether one direct S3 command provably reads to a local path."""
+    line_start = content.rfind("\n", 0, match.start()) + 1
+    line_end = content.find("\n", match.start())
+    if line_end < 0:
+        line_end = len(content)
+    line = content[line_start:line_end]
+    relative = match.start() - line_start
+    command_end = match.end() - line_start
+    for start, end in _iter_unquoted_segment_bounds(line):
+        if start <= relative < end:
+            operands = line[command_end:end].split()
+            return (
+                len(operands) == 2
+                and operands[0].lower().startswith("s3://")
+                and not operands[1].lower().startswith("s3://")
+                and not operands[1].startswith("-")
+                and all(
+                    re.fullmatch(r"[A-Za-z0-9._~:/+-]+", operand)
+                    for operand in operands
+                )
+            )
+    return False
+
+
 def _aws_s3_write_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return ``aws s3 sync``/``cp`` findings with a command label, not URIs.
-
-    Args:
-        content: Hook or manifest text.
-        manifest: When true, only structural command values are scanned.
-
-    Returns:
-        One hit for executable ``aws s3 sync`` or ``aws s3 cp``.
-        ``aws s3 ls``, comments, and echo lookalikes are not this class.
-    """
+    """Return S3-destination write findings without copying operand URIs."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _AWS_S3_WRITE_COMMAND)
-        if match is None:
-            continue
-        verb = match.group("verb").lower()
-        return (
-            PluginHit(
-                rule_id="claude-plugin-aws-s3-write-command",
-                line=first_line + source[: match.start()].count("\n"),
-                snippet="aws s3 " + verb,
-                message=CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE,
-            ),
-        )
+        search_from = 0
+        while search_from < len(source):
+            fragment = source[search_from:]
+            match = _executable_command_match(fragment, _AWS_S3_WRITE_COMMAND)
+            if match is None:
+                break
+            absolute_start = search_from + match.start()
+            if not _is_literal_s3_download(fragment, match):
+                verb = match.group("verb").lower()
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-aws-s3-write-command",
+                        line=first_line + source[:absolute_start].count("\n"),
+                        snippet="aws s3 " + verb,
+                        message=CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE,
+                    ),
+                )
+            search_from += match.end()
     return ()
 
 
