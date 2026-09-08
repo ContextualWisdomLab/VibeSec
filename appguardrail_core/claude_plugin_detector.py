@@ -1722,9 +1722,25 @@ def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
 
 
 def _manifest_argv_command_line(
-    content: str, *, executable: str, verb: str
+    content: str,
+    *,
+    executable: str,
+    verb: str,
+    leading_value_option: str | None = None,
 ) -> int | None:
-    """Return the source line for one direct structural manifest argv command."""
+    """Return the source line for one direct structural manifest argv command.
+
+    Args:
+        content: Parsed-manifest source text.
+        executable: Exact executable basename without an .exe suffix.
+        verb: Exact write verb expected in argv.
+        leading_value_option: Optional single name=value global option
+            allowed before the verb.
+
+    Returns:
+        The one-based command source line, or None when identity, argv
+        types, option grammar, or verb boundaries do not match.
+    """
     try:
         payload = _load_manifest_json(content)
     except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
@@ -1741,17 +1757,29 @@ def _manifest_argv_command_line(
             args = value.get("args")
             if (
                 isinstance(command, str)
-                and command.strip()
+                and command
+                and command == command.strip()
                 and isinstance(args, list)
                 and args
                 and all(isinstance(argument, str) for argument in args)
             ):
                 command_name = (
-                    command.strip().replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                    command.replace("\\", "/").rsplit("/", 1)[-1].casefold()
                 )
                 if command_name.endswith(".exe"):
                     command_name = command_name[:-4]
-                if command_name == executable and args[0].casefold() == verb:
+                verb_index = 0
+                if (
+                    leading_value_option is not None
+                    and args[0].casefold().startswith(leading_value_option)
+                    and len(args[0]) > len(leading_value_option)
+                ):
+                    verb_index = 1
+                if (
+                    command_name == executable
+                    and verb_index < len(args)
+                    and args[verb_index].casefold() == verb
+                ):
                     found_line = _script_line(content, command)
                     return
             for nested in value.values():
@@ -1961,7 +1989,10 @@ def _terraform_apply_command_hits(
         )
     if manifest:
         line = _manifest_argv_command_line(
-            content, executable="terraform", verb="apply"
+            content,
+            executable="terraform",
+            verb="apply",
+            leading_value_option="-chdir=",
         )
         if line is not None:
             return (
