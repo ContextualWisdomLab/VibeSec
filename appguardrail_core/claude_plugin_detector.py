@@ -377,7 +377,8 @@ _REPORTING_BUILTINS: Final = frozenset(
     {":", "echo", "false", "print", "printf", "true"}
 )
 _SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
-_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("eflnruvx")
+_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efluvx")
+_BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("r")
 _BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
     {"--noprofile", "--norc", "--posix", "--restricted", "--verbose"}
 )
@@ -1993,20 +1994,29 @@ def _executable_command_match(    content: str, pattern: re.Pattern[str]
 def _shell_payload_index(
     arguments: tuple[str, ...] | list[str], *, shell_name: str
 ) -> int | None:
-    """Return the payload index after bounded no-value options ending in -c."""
+    """Return the payload index after bounded executable shell options."""
+    seen_short_option = False
     for index, token in enumerate(arguments):
         if shell_name == "bash" and token in _BASH_NO_VALUE_LONG_OPTIONS:
+            if seen_short_option:
+                return None
             continue
         if not token.startswith("-") or token.startswith("--"):
             return None
+        seen_short_option = True
         flags = token[1:]
+        allowed_flags = _SHELL_NO_VALUE_SHORT_OPTIONS
+        if shell_name == "bash":
+            allowed_flags |= _BASH_NO_VALUE_SHORT_OPTIONS
         if not flags or any(
-            flag not in _SHELL_NO_VALUE_SHORT_OPTIONS and flag != "c"
+            flag not in allowed_flags and flag not in {"c", "n"}
             for flag in flags
         ):
             return None
+        if "n" in flags:
+            return None
         if "c" in flags:
-            if flags.count("c") != 1 or not flags.endswith("c"):
+            if flags.count("c") != 1:
                 return None
             payload_index = index + 1
             return payload_index if payload_index < len(arguments) else None
