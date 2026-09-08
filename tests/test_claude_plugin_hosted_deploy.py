@@ -122,6 +122,75 @@ def test_readme_vercel_deploy_is_not_this_class(tmp_path: Path) -> None:
     assert inventory["deployment_write"] is True
 
 
+def test_hook_comment_vercel_deploy_is_not_this_class(tmp_path: Path) -> None:
+    """``# vercel deploy`` is hook documentation, not hosted write authority."""
+    root = _licensed_plugin(tmp_path, "#!/bin/sh\n# vercel deploy --prod\necho hello\n")
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _hits(root, _VERCEL_RULE) == []
+    assert _hits(root, _FLY_RULE) == []
+    assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
+    assert receipt.scan_result == "pass"
+
+
+def test_hook_echo_fly_deploy_is_not_this_class(tmp_path: Path) -> None:
+    """``echo "fly deploy"`` prints a label; it does not run flyctl."""
+    root = _licensed_plugin(tmp_path, '#!/bin/sh\necho "fly deploy"\n')
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _hits(root, _FLY_RULE) == []
+    assert _hits(root, _VERCEL_RULE) == []
+    assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
+    assert receipt.scan_result == "pass"
+
+
+def test_hook_printf_vercel_deploy_is_not_this_class() -> None:
+    """``printf`` of a deploy label is not an executable vercel command."""
+    hits = inspect_claude_plugin_file(
+        "session.sh",
+        "hooks/session.sh",
+        "#!/bin/sh\nprintf '%s\\n' \"vercel deploy\"\n",
+    )
+    assert [hit.rule_id for hit in hits if hit.rule_id in _THIS_CLASS] == []
+
+
+def test_comment_then_real_vercel_deploy_still_fails(tmp_path: Path) -> None:
+    """A comment lookalike does not hide a later executable vercel deploy."""
+    root = _licensed_plugin(
+        tmp_path,
+        '#!/bin/sh\n# vercel deploy\necho "fly deploy"\nvercel deploy --prod\n',
+    )
+    receipt = build_claude_plugin_scan_receipt(root)
+
+    assert _hits(root, _VERCEL_RULE)
+    assert _hits(root, _FLY_RULE) == []
+    assert receipt.scan_result == "fail"
+    assert _VERCEL_RULE in receipt.finding_summary
+    assert _FLY_RULE not in receipt.finding_summary
+
+
+def test_echo_then_real_fly_deploy_still_fails() -> None:
+    """``echo done && fly deploy`` still runs fly on the second segment."""
+    hits = inspect_claude_plugin_file(
+        "session.sh",
+        "hooks/session.sh",
+        '#!/bin/sh\necho "done" && fly deploy --now\n',
+    )
+    assert any(hit.rule_id == _FLY_RULE and hit.snippet == "fly deploy" for hit in hits)
+
+
+def test_inline_comment_after_vercel_deploy_still_fails() -> None:
+    """``vercel deploy # note`` remains an executable hosted-write command."""
+    hits = inspect_claude_plugin_file(
+        "session.sh",
+        "hooks/session.sh",
+        "#!/bin/sh\nvercel deploy --prod # documented\n",
+    )
+    assert any(
+        hit.rule_id == _VERCEL_RULE and hit.snippet == "vercel deploy" for hit in hits
+    )
+
+
 def test_vercel_and_fly_on_one_hook_are_distinct_findings(tmp_path: Path) -> None:
     """One hook can fail closed on both vercel deploy and fly deploy."""
     root = _licensed_plugin(
