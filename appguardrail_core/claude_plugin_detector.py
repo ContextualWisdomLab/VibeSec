@@ -2068,7 +2068,6 @@ def _kubectl_apply_command_hits(
             )
     return ()
 
-
 def _docker_push_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
@@ -2112,6 +2111,25 @@ def _docker_push_command_hits(
                 ),
             )
     return ()
+
+def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return findings for eval/exec/compile/Function on hook surfaces."""
+    match = _DYNAMIC_EVAL.search(content)
+    if match is None:
+        return ()
+    token = match.group(0).strip()
+    if "(" in token:
+        label = token.split("(", 1)[0].strip()[:40]
+    else:
+        label = token.split()[0][:40]
+    return (
+        PluginHit(
+            rule_id="claude-plugin-dynamic-eval",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=label,
+            message=CLAUDE_PLUGIN_DYNAMIC_EVAL_MESSAGE,
+        ),
+    )
 
 
 def _docker_socket_hits(content: str) -> tuple[PluginHit, ...]:
