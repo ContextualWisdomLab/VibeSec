@@ -335,3 +335,26 @@ def test_heredoc_opener_lookalikes_do_not_hide_real_commands() -> None:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
 
+
+
+def test_nonexecuting_builtins_do_not_execute_argument_text() -> None:
+    """No-op and status builtins do not execute command-like arguments."""
+    bodies = (
+        "#!/bin/sh\n: terraform apply -auto-approve\n",
+        "#!/bin/sh\ntrue helm install app chart/\n",
+        "#!/bin/sh\nfalse terraform apply -auto-approve\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_command_after_nonexecuting_builtin_still_fails() -> None:
+    """A no-op argument cannot hide a later real deployment command."""
+    bodies = (
+        "#!/bin/sh\n: terraform apply; helm install app chart/\n",
+        "#!/bin/sh\nfalse helm install app chart/ || terraform apply\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
