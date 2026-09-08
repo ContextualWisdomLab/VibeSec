@@ -74,9 +74,9 @@ def test_untrusted_dashboard_payloads_render_as_data(page) -> None:
     detail_panel.wait_for()
     assert detail_panel.locator("img").count() == 0
     assert markup in detail_panel.text_content()
-    assert detail_panel.locator(".pill").get_attribute("style") == (
-        "background:var(--info)"
-    )
+    assert detail_panel.locator(".pill").evaluate(
+        "element => element.style.background"
+    ) == "var(--info)"
     assert dialogs == []
 
 
