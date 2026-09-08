@@ -81,6 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-## 2025-01-30 - Make Deploy-blocking card interactive
-**Learning:** Making metric cards interactive allows users to easily filter data, improving usability. Adding proper ARIA attributes (role="button", tabindex="0", aria-pressed) and keyboard event listeners ensures the new interaction is fully accessible.
-**Action:** When converting static elements into interactive ones, always add appropriate ARIA roles, tabindex, and keyboard event handlers (Enter/Space) to maintain accessibility.
