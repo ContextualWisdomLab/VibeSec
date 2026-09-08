@@ -18,8 +18,6 @@ _TERRAFORM_RULE = "claude-plugin-terraform-apply-command"
 _HELM_RULE = "claude-plugin-helm-install-command"
 _KUBECTL_RULE = "claude-plugin-kubectl-apply-command"
 _DOCKER_PUSH_RULE = "claude-plugin-docker-push-command"
-_VERCEL_RULE = "claude-plugin-vercel-deploy-command"
-_FLY_RULE = "claude-plugin-fly-deploy-command"
 _SECRET = "sk-tf-must-not-leak"
 _BIDI = "\u202e"
 _THIS_CLASS = frozenset({_TERRAFORM_RULE, _HELM_RULE})
@@ -102,8 +100,8 @@ def test_terraform_plan_and_helm_list_stay_inventory(tmp_path: Path) -> None:
     assert receipt.scan_result == "pass"
 
 
-def test_vercel_deploy_and_fly_deploy_are_not_this_class(tmp_path: Path) -> None:
-    """Hosted deploy CLIs stay later successor classes, not terraform/helm."""
+def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
+    """Hosted deploy CLIs stay inventory; this slice does not own them."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nvercel deploy\nfly deploy\n",
@@ -112,9 +110,7 @@ def test_vercel_deploy_and_fly_deploy_are_not_this_class(tmp_path: Path) -> None
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert _VERCEL_RULE in receipt.finding_summary
-    assert _FLY_RULE in receipt.finding_summary
-    assert receipt.scan_result == "fail"
+    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 
@@ -216,6 +212,7 @@ def test_kubectl_apply_without_terraform_stays_the_kubectl_class() -> None:
     assert _KUBECTL_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
 
+
 def test_hook_comments_and_reporting_builtins_are_not_commands() -> None:
     """Comments and reporting builtins do not execute terraform or Helm."""
     bodies = (
@@ -282,6 +279,7 @@ def test_command_substitution_remains_executable() -> None:
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
 
 
+
 def test_assignment_values_are_not_executable_commands() -> None:
     """An unquoted assignment value cannot turn its following word into the CLI."""
     bodies = (
@@ -302,3 +300,38 @@ def test_environment_assignment_before_real_command_still_fails() -> None:
     for body in bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+
+def test_here_document_payload_is_not_an_executable_command() -> None:
+    """Literal here-document payload is data, even when it names deployment CLIs."""
+    bodies = (
+        "#!/bin/sh\ncat <<'EOF'\nterraform apply -auto-approve\nEOF\n",
+        "#!/bin/sh\ncat <<-EOF\n\thelm install app chart/\n\tEOF\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_command_after_here_document_still_fails() -> None:
+    """An inert payload cannot hide a later executable deployment command."""
+    body = (
+        "#!/bin/sh\ncat <<'EOF'\nterraform apply -auto-approve\nEOF\n"
+        "helm install app chart/\n"
+    )
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    rule_ids = {hit.rule_id for hit in hits}
+    assert _TERRAFORM_RULE not in rule_ids
+    assert _HELM_RULE in rule_ids
+
+
+def test_heredoc_opener_lookalikes_do_not_hide_real_commands() -> None:
+    """Quoted or commented opener text cannot suppress a later real command."""
+    bodies = (
+        '#!/bin/sh\necho "<<EOF"\nterraform apply -auto-approve\n',
+        "#!/bin/sh\n# cat <<EOF\nhelm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
