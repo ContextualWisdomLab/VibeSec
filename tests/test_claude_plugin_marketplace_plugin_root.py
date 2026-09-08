@@ -101,3 +101,26 @@ def test_receipt_rejects_non_bare_source_under_plugin_root(tmp_path: Path) -> No
 
     assert receipt.scan_result == "fail"
     assert "claude-plugin-source-mismatch" in receipt.finding_summary
+
+
+def test_receipt_ignores_unrelated_official_source_types(tmp_path: Path) -> None:
+    """Unsupported unrelated entries cannot poison exact-name target selection."""
+    catalog = _catalog(plugin_root="./plugins", source="safe-plugin")
+    plugins = catalog["plugins"]
+    assert isinstance(plugins, list)
+    plugins.insert(
+        0,
+        {
+            "name": "unrelated-npm-plugin",
+            "source": {
+                "source": "npm",
+                "package": "@example/unrelated-plugin",
+                "version": "2.1.0",
+            },
+        },
+    )
+
+    receipt = _receipt(_plugin(tmp_path / "plugin"), catalog)
+
+    assert receipt.scan_result == "pass"
+    assert "claude-plugin-source-mismatch" not in receipt.finding_summary
