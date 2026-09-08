@@ -450,6 +450,11 @@ _AZ_CONTAINERAPP_UP_COMMAND = re.compile(
 )
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
+_LITERAL_HEREDOC_OPEN = re.compile(
+    r"<<(?P<strip>-)?[ \t]*(?P<quote>['\"]?)"
+    r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
+    r"(?=$|[ \t;&|()<>])"
+)
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
     re.IGNORECASE,
@@ -1919,6 +1924,50 @@ def _shell_command_context_start(line: str, offset: int) -> int | None:
     return None if quote else frame_start
 
 
+def _literal_heredoc_payload_spans(content: str) -> tuple[tuple[int, int], ...]:
+    """Return closed literal here-document payload spans.
+
+    Args:
+        content: One hook or structural manifest command string.
+
+    Returns:
+        Inclusive-start exclusive-end spans for payloads with one confidently
+        parsed identifier delimiter on the opener line. Quoted delimiters and
+        tab-stripping forms are supported. Ambiguous or unclosed forms stay
+        executable for fail-closed analysis.
+    """
+    spans: list[tuple[int, int]] = []
+    active: tuple[str, bool, int] | None = None
+    offset = 0
+    for raw_line in content.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        if active is not None:
+            delimiter, strip_tabs, payload_start = active
+            candidate = line.lstrip("\t") if strip_tabs else line
+            if candidate == delimiter:
+                spans.append((payload_start, offset))
+                active = None
+            offset += len(raw_line)
+            continue
+
+        comment_at = _unquoted_hash_index(line)
+        openers = tuple(
+            match
+            for match in _LITERAL_HEREDOC_OPEN.finditer(line)
+            if (comment_at is None or match.start() < comment_at)
+            and _shell_command_context_start(line, match.start()) is not None
+        )
+        if len(openers) == 1:
+            opener = openers[0]
+            active = (
+                opener.group("delimiter"),
+                opener.group("strip") is not None,
+                offset + len(raw_line),
+            )
+        offset += len(raw_line)
+    return tuple(spans)
+
+
 def _match_starts_in_shell_assignment_value(segment: str, offset: int) -> bool:
     """Return whether ``offset`` starts inside an unquoted assignment word.
 
@@ -1940,8 +1989,9 @@ def _executable_command_match(    content: str, pattern: re.Pattern[str]
 ) -> re.Match[str] | None:
     """Return the first regex match that is an executable command context.
 
-    Unquoted ``#`` comments, quoted prose, shell assignment values, and
-    ``echo``/``printf``/``print`` segments are not executable. Direct
+    Unquoted ``#`` comments, quoted prose, closed literal here-document
+    payloads, shell assignment values, and ``echo``/``printf``/``print``
+    segments are not executable. Direct
     commands inside ``$(...)`` or backticks remain executable.
 
     Args:
@@ -1953,7 +2003,10 @@ def _executable_command_match(    content: str, pattern: re.Pattern[str]
     """
     if not content:
         return None
+    inert_payloads = _literal_heredoc_payload_spans(content)
     for match in pattern.finditer(content):
+        if any(start <= match.start() < end for start, end in inert_payloads):
+            continue
         line_start = content.rfind("\n", 0, match.start()) + 1
         line_end = content.find("\n", match.start())
         if line_end < 0:
