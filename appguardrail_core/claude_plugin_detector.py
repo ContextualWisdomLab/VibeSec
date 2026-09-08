@@ -1760,11 +1760,11 @@ def _shell_command_context_start(line: str, offset: int) -> int | None:
             frames.append((")", index + 2, "", 1))
             index += 2
             continue
-        if quote != "'" and char == "\`":
-            if frame_end == "\`":
+        if quote != "'" and char == "`":
+            if frame_end == "`":
                 frames.pop()
             else:
-                frames.append(("\`", index + 1, "", 0))
+                frames.append(("`", index + 1, "", 0))
             index += 1
             continue
         if quote:
