@@ -272,7 +272,7 @@ def test_command_substitution_remains_executable() -> None:
     """Direct commands in modern and legacy substitutions remain executable."""
     bodies = (
         '#!/bin/sh\nresult="$(terraform apply -auto-approve)"\n',
-        "#!/bin/sh\nresult=\`helm install app chart/\`\n",
+        "#!/bin/sh\nresult=`helm install app chart/`\n",
     )
     for body in bodies:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
