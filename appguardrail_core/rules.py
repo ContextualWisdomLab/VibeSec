@@ -142,7 +142,7 @@ def build_rule_metadata(
     for ref in references:
         if ref.startswith("OWASP "):
             owasp_list.append(ref)
-        if ref.startswith("CWE-"):
+        elif ref.startswith("CWE-"):
             cwe_list.append(ref)
 
     return RuleMetadata(
