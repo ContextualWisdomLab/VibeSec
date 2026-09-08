@@ -368,6 +368,8 @@ _DOCKER_PUSH_COMMAND = re.compile(
 )
 _TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
 _HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
+_REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
+_FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
     re.IGNORECASE,
