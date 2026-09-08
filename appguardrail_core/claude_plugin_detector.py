@@ -33,11 +33,13 @@ writes. Hook or manifest ``npm publish``, ``twine upload``, and
 ``cargo publish`` fail closed as registry-publish command findings.
 Hook or manifest ``pnpm publish``, ``uv publish``, and
 ``poetry publish`` fail closed as alternate-manager registry writes.
+Hook or manifest ``gem push`` and ``nuget push`` fail closed as
+RubyGems and NuGet registry writes.
 Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
 ``aws s3 ls``, ``gcloud config list``, ``az account show``,
-``npm pack``, and ``cargo check``
+``npm pack``, ``cargo check``, ``gem list``, and ``nuget list``
 stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
@@ -47,7 +49,7 @@ Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
 ``aws s3 ls``, ``gcloud config list``, ``az account show``,
-``npm pack``, and ``cargo check``
+``npm pack``, ``cargo check``, ``gem list``, and ``nuget list``
 stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
@@ -344,6 +346,16 @@ CLAUDE_PLUGIN_POETRY_PUBLISH_COMMAND_MESSAGE: Final = (
     "distribution is write authority on PyPI. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_GEM_PUSH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs gem push. Publishing a gem is "
+    "write authority on RubyGems. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_NUGET_PUSH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs nuget push. Publishing a package "
+    "is write authority on NuGet. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -490,6 +502,11 @@ _CARGO_PUBLISH_COMMAND = re.compile(r"\bcargo\s+publish\b", re.IGNORECASE)
 _PNPM_PUBLISH_COMMAND = re.compile(r"\bpnpm\s+publish\b", re.IGNORECASE)
 _UV_PUBLISH_COMMAND = re.compile(r"\buv\s+publish\b", re.IGNORECASE)
 _POETRY_PUBLISH_COMMAND = re.compile(r"\bpoetry\s+publish\b", re.IGNORECASE)
+_GEM_PUSH_COMMAND = re.compile(r"\bgem\s+push\b", re.IGNORECASE)
+_NUGET_PUSH_COMMAND = re.compile(
+    r"\b(?:dotnet\s+)?nuget\s+push\b",
+    re.IGNORECASE,
+)
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
@@ -772,7 +789,8 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         re.compile(
             r"\b(?:pip|npm|pnpm|yarn|uv|cargo|apt-get)\s+install\b|"
             r"\b(?:npm\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|"
-            r"uv\s+publish|poetry\s+publish)\b",
+            r"uv\s+publish|poetry\s+publish|gem\s+push|"
+            r"(?:dotnet\s+)?nuget\s+push)\b",
             re.IGNORECASE,
         ),
     ),
@@ -998,6 +1016,8 @@ def inspect_claude_plugin_file(
         hits.extend(_pnpm_publish_command_hits(content, manifest=manifest))
         hits.extend(_uv_publish_command_hits(content, manifest=manifest))
         hits.extend(_poetry_publish_command_hits(content, manifest=manifest))
+        hits.extend(_gem_push_command_hits(content, manifest=manifest))
+        hits.extend(_nuget_push_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -2307,6 +2327,62 @@ def _poetry_publish_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="poetry publish",
                 message=CLAUDE_PLUGIN_POETRY_PUBLISH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _gem_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``gem push`` findings with a command label, not gem names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``gem push``. ``gem list``, comments, and
+        echo lookalikes are not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GEM_PUSH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-gem-push-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="gem push",
+                message=CLAUDE_PLUGIN_GEM_PUSH_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _nuget_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``nuget push`` findings with a command label, not package names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``nuget push`` or ``dotnet nuget push``.
+        ``nuget list`` is not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _NUGET_PUSH_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-nuget-push-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="nuget push",
+                message=CLAUDE_PLUGIN_NUGET_PUSH_COMMAND_MESSAGE,
             ),
         )
     return ()

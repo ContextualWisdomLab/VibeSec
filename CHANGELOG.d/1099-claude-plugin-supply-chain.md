@@ -159,12 +159,15 @@
   `claude-plugin-pnpm-publish-command`. ``uv publish`` fails as
   `claude-plugin-uv-publish-command`. ``poetry publish`` fails as
   `claude-plugin-poetry-publish-command`. ``yarn npm publish`` stays
-  `claude-plugin-npm-publish-command`.
+  `claude-plugin-npm-publish-command`. ``gem push`` fails as
+  `claude-plugin-gem-push-command`. ``nuget push`` and
+  ``dotnet nuget push`` fail as `claude-plugin-nuget-push-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
   ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
-  ``az account show``, ``npm pack``, and ``cargo check``
+  ``az account show``, ``npm pack``, ``cargo check``, ``gem list``,
+  and ``nuget list``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.
