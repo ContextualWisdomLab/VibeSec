@@ -264,12 +264,14 @@ def test_quoted_pod_push_task_fails_admission(tmp_path: Path) -> None:
 
 
 
-def test_quoted_cli_names_still_fail_admission() -> None:
+def test_quoted_cli_names_still_fail_admission(tmp_path: Path) -> None:
     """Quoting an exact CLI name does not remove its registry write authority."""
     cases = (
-        ('#!/bin/sh\n"deno" publish --allow-slow-types\n', _DENO_RULE),
-        ("#!/bin/sh\n'pod' trunk push App.podspec\n", _POD_RULE),
+        ("deno", '#!/bin/sh\n"deno" publish --allow-slow-types\n', _DENO_RULE),
+        ("pod", "#!/bin/sh\n'pod' trunk push App.podspec\n", _POD_RULE),
     )
-    for body, expected_rule in cases:
-        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
-        assert any(hit.rule_id == expected_rule for hit in hits)
+    for name, body, expected_rule in cases:
+        root = _licensed_plugin(tmp_path / name, body)
+        assert _hits(root, expected_rule)
+        assert build_claude_plugin_scan_receipt(root).scan_result == "fail"
+        assert inventory_claude_plugin_capabilities(root)["package_install"] is True
