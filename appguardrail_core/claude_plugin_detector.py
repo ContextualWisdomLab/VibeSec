@@ -63,7 +63,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import stat
 import tarfile
 from typing import Final, Iterable
@@ -1711,15 +1710,7 @@ def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
         if isinstance(value, dict):
             for key, nested in value.items():
                 if key == "command" and isinstance(nested, str) and nested.strip():
-                    args = value.get("args")
-                    command = nested
-                    if isinstance(args, list) and all(
-                        isinstance(argument, str) for argument in args
-                    ):
-                        command = " ".join(
-                            (nested, *(shlex.quote(argument) for argument in args))
-                        )
-                    found.append((command, _script_line(content, nested)))
+                    found.append((nested, _script_line(content, nested)))
                 else:
                     collect(nested)
         elif isinstance(value, list):
@@ -1728,6 +1719,49 @@ def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
 
     collect(payload)
     return tuple(found)
+
+
+def _manifest_argv_command_line(
+    content: str, *, executable: str, verb: str
+) -> int | None:
+    """Return the source line for one direct structural manifest argv command."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return None
+
+    found_line: int | None = None
+
+    def collect(value: object) -> None:
+        nonlocal found_line
+        if found_line is not None:
+            return
+        if isinstance(value, dict):
+            command = value.get("command")
+            args = value.get("args")
+            if (
+                isinstance(command, str)
+                and command.strip()
+                and isinstance(args, list)
+                and args
+                and all(isinstance(argument, str) for argument in args)
+            ):
+                command_name = (
+                    command.strip().replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                )
+                if command_name.endswith(".exe"):
+                    command_name = command_name[:-4]
+                if command_name == executable and args[0].casefold() == verb:
+                    found_line = _script_line(content, command)
+                    return
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return found_line
 
 
 def _hosted_command_sources(
@@ -1925,6 +1959,19 @@ def _terraform_apply_command_hits(
                 message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
             ),
         )
+    if manifest:
+        line = _manifest_argv_command_line(
+            content, executable="terraform", verb="apply"
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-terraform-apply-command",
+                    line=line,
+                    snippet="terraform apply",
+                    message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+                ),
+            )
     return ()
 
 
@@ -1944,6 +1991,17 @@ def _helm_install_command_hits(
                 message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
             ),
         )
+    if manifest:
+        line = _manifest_argv_command_line(content, executable="helm", verb="install")
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-helm-install-command",
+                    line=line,
+                    snippet="helm install",
+                    message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+                ),
+            )
     return ()
 
 
