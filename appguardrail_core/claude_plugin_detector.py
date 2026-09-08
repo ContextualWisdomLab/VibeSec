@@ -854,8 +854,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_release_command_hits(content))
         hits.extend(_kubectl_apply_command_hits(content))
         hits.extend(_docker_push_command_hits(content))
-        hits.extend(_terraform_apply_command_hits(content))
-        hits.extend(_helm_install_command_hits(content))
+        hits.extend(_terraform_apply_command_hits(content, manifest=manifest))
+        hits.extend(_helm_install_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1572,53 +1572,192 @@ def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
-def _terraform_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``terraform apply`` findings with a command label, not vars.
+def _unquoted_hash_index(line: str) -> int | None:
+    """Return the index of an unquoted ``#`` shell comment, if any.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        The comment index, or ``None`` when every ``#`` is quoted or escaped.
+    """
+    in_single = False
+    in_double = False
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if char == "#" and not in_single and not in_double:
+            return index
+    return None
+
+
+def _iter_unquoted_segment_bounds(line: str) -> tuple[tuple[int, int], ...]:
+    """Return start/end offsets of unquoted shell command segments.
+
+    Args:
+        line: One hook or manifest line without a trailing newline.
+
+    Returns:
+        Inclusive-start exclusive-end spans split on unquoted ``&&``,
+        ``||``, ``;``, ``|``, and ``&``. Quoted lookalikes stay one span.
+    """
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    in_single = False
+    in_double = False
+    escaped = False
+    length = len(line)
+    index = 0
+    while index < length:
+        char = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            index += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            index += 1
+            continue
+        if in_single or in_double:
+            index += 1
+            continue
+        two = line[index : index + 2]
+        if two in {"&&", "||"}:
+            bounds.append((start, index))
+            start = index + 2
+            index += 2
+            continue
+        if char in {";", "|", "&"}:
+            bounds.append((start, index))
+            start = index + 1
+            index += 1
+            continue
+        index += 1
+    bounds.append((start, length))
+    return tuple(bounds)
+
+
+def _first_shell_token(segment: str) -> str:
+    """Return the first command basename of a shell segment.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        A lowercase basename such as ``echo``. Empty when the fragment
+        has no command token.
+    """
+    match = _FIRST_SHELL_TOKEN.match(segment)
+    if match is None:
+        return ""
+    name = match.group(1).rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name.lower()
+
+
+def _is_reporting_builtin_segment(segment: str) -> bool:
+    """Return whether the segment only prints text instead of running a CLI.
+
+    Args:
+        segment: One unquoted command fragment.
+
+    Returns:
+        ``True`` for ``echo``, ``printf``, and ``print``, including path
+        and ``.exe`` spellings.
+    """
+    return _first_shell_token(segment) in _REPORTING_BUILTINS
+
+
+def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
+    """Return structural manifest command strings with source line numbers."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return ()
+
+    found: list[tuple[str, int]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key == "command" and isinstance(nested, str) and nested.strip():
+                    found.append((nested, _script_line(content, nested)))
+                else:
+                    collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return tuple(found)
+
+
+def _hosted_command_sources(
+    content: str, *, manifest: bool
+) -> tuple[tuple[str, int], ...]:
+    """Return shell text sources for one hook or structural manifest."""
+    if manifest:
+        return _manifest_command_sources(content)
+    return ((content, 1),)
+
+
+def _executable_command_match(
+    content: str, pattern: re.Pattern[str]
+) -> re.Match[str] | None:
+    """Return the first regex match that is an executable command context.
+
+    Unquoted ``#`` comments and ``echo``/``printf``/``print`` segments are
+    not executable. Manifest JSON command strings remain searchable
+    because they are not reporting builtins.
 
     Args:
         content: Hook or manifest text.
+        pattern: Compiled command regex.
 
     Returns:
-        One hit when ``terraform apply`` is present. ``terraform plan``
-        and README wording are not this class.
+        The first executable match, or ``None``.
     """
-    match = _TERRAFORM_APPLY_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-terraform-apply-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="terraform apply",
-            message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
-        ),
-    )
+    if not content:
+        return None
+    for match in pattern.finditer(content):
+        line_start = content.rfind("\n", 0, match.start()) + 1
+        line_end = content.find("\n", match.start())
+        if line_end < 0:
+            line_end = len(content)
+        line = content[line_start:line_end]
+        relative = match.start() - line_start
+        comment_at = _unquoted_hash_index(line)
+        if comment_at is not None and relative >= comment_at:
+            continue
+        for start, end in _iter_unquoted_segment_bounds(line):
+            if start <= relative < end:
+                if not _is_reporting_builtin_segment(line[start:end]):
+                    return match
+                break
+    return None
 
 
-def _helm_install_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``helm install`` findings with a command label, not chart names.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit when ``helm install`` is present. ``helm list`` and
-        ``helm status`` are not this class.
-    """
-    match = _HELM_INSTALL_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-helm-install-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="helm install",
-            message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
-        ),
-    )
-
-
-def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
+def _terraform_apply_command_hits(\n    content: str, *, manifest: bool = False\n) -> tuple[PluginHit, ...]:\n    """Return executable terraform apply findings without vars."""\n    for source, first_line in _hosted_command_sources(content, manifest=manifest):\n        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)\n        if match is None:\n            continue\n        return (\n            PluginHit(\n                rule_id="claude-plugin-terraform-apply-command",\n                line=first_line + source[: match.start()].count("\\n"),\n                snippet="terraform apply",\n                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,\n            ),\n        )\n    return ()\n\n\ndef _helm_install_command_hits(\n    content: str, *, manifest: bool = False\n) -> tuple[PluginHit, ...]:\n    """Return executable helm install findings without chart names."""\n    for source, first_line in _hosted_command_sources(content, manifest=manifest):\n        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)\n        if match is None:\n            continue\n        return (\n            PluginHit(\n                rule_id="claude-plugin-helm-install-command",\n                line=first_line + source[: match.start()].count("\\n"),\n                snippet="helm install",\n                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,\n            ),\n        )\n    return ()\n\n\ndef _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
     """Return findings for eval/exec/compile/Function on hook surfaces."""
     match = _DYNAMIC_EVAL.search(content)
     if match is None:
