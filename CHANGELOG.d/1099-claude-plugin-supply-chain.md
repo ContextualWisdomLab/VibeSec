@@ -150,6 +150,9 @@
   `claude-plugin-aws-deploy-command`. ``gcloud run|app|functions
   deploy`` fails as `claude-plugin-gcloud-deploy-command`.
   ``az webapp deploy`` fails as `claude-plugin-az-deploy-command`.
+  ``aws s3 sync`` and ``aws s3 cp`` fail as
+  `claude-plugin-aws-s3-write-command`. ``az containerapp up`` fails as
+  `claude-plugin-az-containerapp-up-command`.
   Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,

@@ -196,6 +196,7 @@ def test_plugin_manifest_az_webapp_deploy_fails_admission(tmp_path: Path) -> Non
         (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [{"command": "az webapp deploy --name app"}],
     }
     _write_json(root / ".claude-plugin" / "plugin.json", manifest)
@@ -225,6 +226,7 @@ def test_manifest_cloud_prose_and_reporting_commands_are_not_this_class(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["description"] = "operators may later run gcloud run deploy"
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [
             {"command": 'echo "aws cloudformation deploy"'},
             {"command": "printf '%s\\n' 'az webapp deploy'"},
@@ -246,6 +248,7 @@ def test_manifest_reporting_command_does_not_hide_later_cloud_deploy(
     manifest_path = root / ".claude-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [
             {"command": 'echo "gcloud run deploy"'},
             {"command": "aws cloudformation deploy --stack-name app"},

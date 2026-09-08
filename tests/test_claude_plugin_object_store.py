@@ -161,6 +161,7 @@ def test_plugin_manifest_containerapp_up_fails_admission(tmp_path: Path) -> None
         (root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [{"command": "az containerapp up --name app"}],
     }
     _write_json(root / ".claude-plugin" / "plugin.json", manifest)
@@ -177,6 +178,7 @@ def test_manifest_prose_and_reporting_are_not_this_class(tmp_path: Path) -> None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["description"] = "operators may later run aws s3 sync"
     manifest["hooks"] = {
+        "PreToolUse": [{"command": "hooks/session.sh"}],
         "PostToolUse": [{"command": 'echo "az containerapp up"'}],
     }
     _write_json(manifest_path, manifest)

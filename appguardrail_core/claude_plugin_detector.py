@@ -27,7 +27,9 @@ Hook or manifest ``vercel deploy`` and ``fly deploy`` fail closed as
 hosted-deploy command findings. Hook or manifest ``aws cloudformation
 deploy``, ``aws deploy create-deployment``, ``gcloud run|app|functions
 deploy``, and ``az webapp deploy`` fail closed as cloud-deploy command
-findings. Unquoted ``#`` comments and
+findings. Hook or manifest ``aws s3 sync``, ``aws s3 cp``, and
+``az containerapp up`` fail closed as object-store and Container Apps
+writes. Unquoted ``#`` comments and
 ``echo``/``printf``/``print`` lookalikes are not that class.
 ``terraform plan``, ``helm list``, ``vercel ls``, ``fly status``,
 ``aws s3 ls``, ``gcloud config list``, and ``az account show``
@@ -296,6 +298,16 @@ CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE: Final = (
     "Azure web app is write authority. Remove the command. "
     "[CWE-269 - Improper Privilege Management]"
 )
+CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs aws s3 sync or aws s3 cp. "
+    "Copying objects into a bucket is write authority. Remove the "
+    "command. [CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_AZ_CONTAINERAPP_UP_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs az containerapp up. Publishing "
+    "a Container Apps revision is write authority. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -431,6 +443,11 @@ _GCLOUD_DEPLOY_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _AZ_DEPLOY_COMMAND = re.compile(r"\baz\s+webapp\s+deploy\b", re.IGNORECASE)
+_AWS_S3_WRITE_COMMAND = re.compile(r"\baws\s+s3\s+(?P<verb>sync|cp)\b", re.IGNORECASE)
+_AZ_CONTAINERAPP_UP_COMMAND = re.compile(
+    r"\baz\s+containerapp\s+up\b",
+    re.IGNORECASE,
+)
 _REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
 _FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
 _DOCKER_SOCKET = re.compile(
@@ -668,8 +685,9 @@ _TEXT_CAPABILITY_PATTERNS: Final = (
         re.compile(
             r"\b(?:kubectl\s+apply|terraform\s+apply|helm\s+install|"
             r"vercel\s+deploy|fly(?:ctl)?\s+deploy|docker\s+push|"
-            r"aws\s+(?:cloudformation\s+deploy|deploy\s+create-deployment)|"
-            r"gcloud\s+(?:run|app|functions)\s+deploy|az\s+webapp\s+deploy)\b",
+            r"aws\s+(?:cloudformation\s+deploy|deploy\s+create-deployment|s3\s+(?:sync|cp))|"
+            r"gcloud\s+(?:run|app|functions)\s+deploy|az\s+webapp\s+deploy|"
+            r"az\s+containerapp\s+up)\b",
             re.IGNORECASE,
         ),
     ),
@@ -928,6 +946,8 @@ def inspect_claude_plugin_file(
         hits.extend(_aws_deploy_command_hits(content, manifest=manifest))
         hits.extend(_gcloud_deploy_command_hits(content, manifest=manifest))
         hits.extend(_az_deploy_command_hits(content, manifest=manifest))
+        hits.extend(_aws_s3_write_command_hits(content, manifest=manifest))
+        hits.extend(_az_containerapp_up_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1994,6 +2014,64 @@ def _az_deploy_command_hits(
                 line=first_line + source[: match.start()].count("\n"),
                 snippet="az webapp deploy",
                 message=CLAUDE_PLUGIN_AZ_DEPLOY_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _aws_s3_write_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``aws s3 sync``/``cp`` findings with a command label, not URIs.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit for executable ``aws s3 sync`` or ``aws s3 cp``.
+        ``aws s3 ls``, comments, and echo lookalikes are not this class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _AWS_S3_WRITE_COMMAND)
+        if match is None:
+            continue
+        verb = match.group("verb").lower()
+        return (
+            PluginHit(
+                rule_id="claude-plugin-aws-s3-write-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="aws s3 " + verb,
+                message=CLAUDE_PLUGIN_AWS_S3_WRITE_COMMAND_MESSAGE,
+            ),
+        )
+    return ()
+
+
+def _az_containerapp_up_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return ``az containerapp up`` findings with a command label, not names.
+
+    Args:
+        content: Hook or manifest text.
+        manifest: When true, only structural command values are scanned.
+
+    Returns:
+        One hit when executable ``az containerapp up`` is present.
+        ``az account show``, comments, and echo lookalikes are not this
+        class.
+    """
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _AZ_CONTAINERAPP_UP_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-az-containerapp-up-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="az containerapp up",
+                message=CLAUDE_PLUGIN_AZ_CONTAINERAPP_UP_COMMAND_MESSAGE,
             ),
         )
     return ()
