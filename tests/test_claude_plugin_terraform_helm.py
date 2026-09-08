@@ -211,3 +211,46 @@ def test_kubectl_apply_without_terraform_stays_the_kubectl_class() -> None:
     rule_ids = {hit.rule_id for hit in hits}
     assert _KUBECTL_RULE in rule_ids
     assert _THIS_CLASS.isdisjoint(rule_ids)
+
+def test_hook_comments_and_reporting_builtins_are_not_commands() -> None:
+    """Comments and reporting builtins do not execute terraform or Helm."""
+    bodies = (
+        "#!/bin/sh\n# terraform apply -auto-approve\n",
+        "#!/bin/sh\necho 'helm install app chart/'\n",
+        "#!/bin/sh\nprintf 'terraform apply -auto-approve\\n'\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_manifest_prose_and_reporting_commands_are_not_commands() -> None:
+    """Only structural executable command values carry deployment authority."""
+    content = json.dumps(
+        {
+            "name": "safe-plugin",
+            "description": "Run terraform apply or helm install only after review.",
+            "hooks": {
+                "PostToolUse": [
+                    {"command": "echo 'terraform apply -auto-approve'"},
+                    {"command": "printf 'helm install app chart/\\n'"},
+                ]
+            },
+        }
+    )
+    hits = inspect_claude_plugin_file(
+        "plugin.json", ".claude-plugin/plugin.json", content
+    )
+    assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_later_executable_command_after_reporting_segment_still_fails() -> None:
+    """A reporting segment cannot hide a later real terraform or Helm write."""
+    bodies = (
+        "#!/bin/sh\necho checked && terraform apply -auto-approve\n",
+        "#!/bin/sh\nprintf 'checked\\n'; helm install app chart/\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
