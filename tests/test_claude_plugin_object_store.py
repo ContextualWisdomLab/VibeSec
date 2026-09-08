@@ -1,4 +1,4 @@
-"""Hook aws s3 writes and az containerapp up fail closed; ls stays inventory."""
+"""Hook aws s3 writes and az containerapp up fail closed; reads stay inventory."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _hits(root: Path, rule_id: str):
 
 
 def test_hook_aws_s3_sync_fails_admission(tmp_path: Path) -> None:
-    """``aws s3 sync`` on a hook is object-store write authority."""
+    """``aws s3 sync`` to S3 is object-store write authority."""
     root = _licensed_plugin(tmp_path, "#!/bin/sh\naws s3 sync ./dist s3://bucket/app\n")
     hits = _hits(root, _S3_RULE)
     receipt = build_claude_plugin_scan_receipt(root)
@@ -74,10 +74,31 @@ def test_hook_aws_s3_sync_fails_admission(tmp_path: Path) -> None:
 
 
 def test_hook_aws_s3_cp_fails_admission() -> None:
-    """``aws s3 cp`` is the same object-store write class."""
+    """``aws s3 cp`` to S3 is object-store write authority."""
     body = "#!/bin/sh\naws s3 cp artifact.tgz s3://bucket/app.tgz\n"
     hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
     assert any(hit.rule_id == _S3_RULE and hit.snippet == "aws s3 cp" for hit in hits)
+
+
+def test_hook_aws_s3_cp_download_stays_inventory() -> None:
+    """A provable S3-to-local copy is read authority, not this write class."""
+    body = "#!/bin/sh\naws s3 cp s3://bucket/app.tgz ./app.tgz\n"
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    assert not any(hit.rule_id == _S3_RULE for hit in hits)
+
+
+def test_hook_aws_s3_sync_download_stays_inventory() -> None:
+    """A provable S3-to-local sync is read authority, not this write class."""
+    body = "#!/bin/sh\naws s3 sync s3://bucket/app ./app\n"
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    assert not any(hit.rule_id == _S3_RULE for hit in hits)
+
+
+def test_hook_aws_s3_to_s3_copy_still_fails_admission() -> None:
+    """S3-to-S3 copy still writes the destination bucket."""
+    body = "#!/bin/sh\naws s3 cp s3://source/app.tgz s3://target/app.tgz\n"
+    hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+    assert any(hit.rule_id == _S3_RULE for hit in hits)
 
 
 def test_hook_az_containerapp_up_fails_admission(tmp_path: Path) -> None:
