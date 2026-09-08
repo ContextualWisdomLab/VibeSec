@@ -241,6 +241,73 @@ def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
         assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
 
 
+def test_nested_shell_c_payloads_fail_admission() -> None:
+    """Direct shell -c payloads preserve executable deployment commands."""
+    cases = (
+        ("#!/bin/sh\nsh -c 'terraform apply -auto-approve'\n", _TERRAFORM_RULE),
+        ('#!/bin/sh\n/bin/bash -lc "helm install app chart/"\n', _HELM_RULE),
+        (
+            "#!/bin/sh\nTF_IN_AUTOMATION=1 bash -ec 'terraform apply'\n",
+            _TERRAFORM_RULE,
+        ),
+        (
+            "#!/bin/sh\necho checked; sh -c 'echo ok && terraform apply'\n",
+            _TERRAFORM_RULE,
+        ),
+    )
+    for body, expected_rule in cases:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        rule_ids = {hit.rule_id for hit in hits}
+
+        assert expected_rule in rule_ids
+
+
+def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
+    """Shell-string and direct-argv manifest payloads use the same boundary."""
+    manifests = (
+        {"command": "bash -c 'terraform apply -auto-approve'"},
+        {"command": "bash", "args": ["-c", "helm install app chart/"]},
+        {"command": "/bin/sh", "args": ["-lc", "terraform apply"]},
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"writer": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+
+def test_nested_shell_c_payload_boundaries_stay_negative() -> None:
+    """Reporting, wrapper, malformed, and non-write shell payloads stay inert."""
+    hook_bodies = (
+        "#!/bin/sh\necho \"sh -c 'terraform apply'\"\n",
+        "#!/bin/sh\ncommand=\"sh -c 'helm install app chart/'\"\n",
+        "#!/bin/sh\nfalse sh -c 'terraform apply'\n",
+        "#!/bin/sh\nwrapper sh -c 'helm install app chart/'\n",
+        "#!/bin/sh\nsh -c \"echo 'terraform apply'\"\n",
+        "#!/bin/sh\nsh -c 'command=helm install app chart/'\n",
+        "#!/bin/sh\nsh -c 'terraform plan'\n",
+        "#!/bin/sh\nsh -c 'helm install-chart app chart/'\n",
+        "#!/bin/sh\necho ok # ; sh -c 'terraform apply'\n",
+    )
+    for body in hook_bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+    manifests = (
+        {"command": "bash", "args": ["terraform apply"]},
+        {"command": "bash", "args": ["-c"]},
+        {"command": "bash", "args": "-c terraform apply"},
+        {"command": "bash", "args": ["-c", "terraform", "apply"]},
+        {"command": "echo", "args": ["sh", "-c", "terraform apply"]},
+        {"command": "wrapper", "args": ["bash", "-c", "helm install"]},
+        {"command": "bash", "args": ["-c", "terraform apply", 1]},
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"reader": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
 def test_empty_hook_is_not_this_class() -> None:
     """Empty hook text is not terraform or helm write authority."""
     hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", "")
