@@ -122,7 +122,7 @@ def detect_stack_profile(files: Iterable[str | Path]) -> StackProfile:
     """Infer the most helpful zero-config scan profile for beginner users."""
     files_list = list(files) if not isinstance(files, (list, set, tuple)) else files
     paths = [
-        file_path if isinstance(file_path, str) else str(file_path)
+        str(file_path) if isinstance(file_path, Path) else file_path
         for file_path in files_list
     ]
     languages = detect_language_axes(paths)
