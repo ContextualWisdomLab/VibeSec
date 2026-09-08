@@ -1216,7 +1216,11 @@ class _MarketplaceCatalogError(ValueError):
     """Raised when a marketplace catalog cannot bind one plugin identity."""
 
 
-def _normalize_marketplace_entry(entry: object) -> dict[str, object]:
+def _normalize_marketplace_entry(
+    entry: object,
+    *,
+    plugin_root: object | None = None,
+) -> dict[str, object]:
     """Return one validated entry with URL/SHA source aliases normalized."""
     if not isinstance(entry, dict):
         raise _MarketplaceCatalogError("invalid plugin entry")
@@ -1229,12 +1233,39 @@ def _normalize_marketplace_entry(entry: object) -> dict[str, object]:
     source = entry.get("source")
     if isinstance(source, str):
         normalized_path = source.replace("\\", "/")
+        if not normalized_path.startswith("./"):
+            normalized_root = (
+                plugin_root.replace("\\", "/")
+                if isinstance(plugin_root, str)
+                else ""
+            )
+            root_parts = normalized_root[2:].split("/")
+            if (
+                not normalized_path
+                or normalized_path in {".", ".."}
+                or "/" in normalized_path
+                or _CONCEALED_CHAR.search(normalized_path)
+                or (
+                    normalized_root != "."
+                    and (
+                        not normalized_root.startswith("./")
+                        or not root_parts
+                        or any(part in {"", ".", ".."} for part in root_parts)
+                    )
+                )
+            ):
+                raise _MarketplaceCatalogError("invalid relative plugin source")
+            normalized_path = (
+                f"./{normalized_path}"
+                if normalized_root == "."
+                else f"{normalized_root}/{normalized_path}"
+            )
         path_parts = normalized_path[2:].split("/")
         if (
             not normalized_path.startswith("./")
             or not path_parts
             or any(part in {"", ".", ".."} for part in path_parts)
-            or _CONCEALED_CHAR.search(source)
+            or _CONCEALED_CHAR.search(normalized_path)
         ):
             raise _MarketplaceCatalogError("invalid relative plugin source")
         normalized = dict(entry)
@@ -1279,15 +1310,20 @@ def _select_marketplace_entry(
     plugin_name = _plugin_identity(root)["plugin_name"]
     if not plugin_name:
         raise _MarketplaceCatalogError("materialized plugin identity is missing")
+    metadata = payload.get("metadata")
+    plugin_root = metadata.get("pluginRoot") if isinstance(metadata, dict) else None
     plugins = payload.get("plugins")
     if plugins is None:
-        selected = _normalize_marketplace_entry(payload)
+        selected = _normalize_marketplace_entry(payload, plugin_root=plugin_root)
         if selected["name"] != plugin_name:
             raise _MarketplaceCatalogError("catalog entry does not match plugin")
         return selected
     if not isinstance(plugins, list):
         raise _MarketplaceCatalogError("invalid plugins collection")
-    normalized_entries = [_normalize_marketplace_entry(entry) for entry in plugins]
+    normalized_entries = [
+        _normalize_marketplace_entry(entry, plugin_root=plugin_root)
+        for entry in plugins
+    ]
     matches = [entry for entry in normalized_entries if entry["name"] == plugin_name]
     if len(matches) != 1:
         raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
