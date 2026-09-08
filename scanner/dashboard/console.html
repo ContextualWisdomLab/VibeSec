@@ -31,8 +31,8 @@
   .stat{flex:1;min-width:130px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
   .stat .n{font-size:26px;font-weight:800}
   .stat .l{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--divider);font-size:13px}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--divider);font-size:13px;overflow-wrap:anywhere}
   th{font-size:11px;color:var(--muted);text-transform:uppercase}
   tr.scan{cursor:pointer}
   tr.scan:hover{background:var(--bg)}
@@ -112,6 +112,7 @@ function scrollDetailIntoView(element){
   }
 }
 
+function count(n){const v=Number(n);return Number.isSafeInteger(v)&&v>=0?v:0;}
 async function load(){
   try{
     const {scans}=await api("/api/v1/scans");
@@ -121,19 +122,19 @@ async function load(){
     const latest=scans[0]||{severity_counts:{}};
     const c=latest.severity_counts||{};
     $("#stats").innerHTML=[
-      ["Latest deploy-blocking",latest.deploy_blocking||0],
-      ["New since last scan",latest.new_blocking||0],
-      ["Critical",c.CRITICAL||0],
+      ["Latest deploy-blocking",count(latest.deploy_blocking)],
+      ["New since last scan",count(latest.new_blocking)],
+      ["Critical",count(c.CRITICAL)],
       ["Scans stored",scans.length],
     ].map(([l,n])=>`<div class="stat"><div class="l">${l}</div><div class="n">${n}</div></div>`).join("");
     const ord=[...scans].reverse();
-    const max=Math.max(1,...ord.map(s=>s.deploy_blocking||0));
-    $("#trend").innerHTML=ord.map(s=>{const h=Math.round(6+((s.deploy_blocking||0)/max)*54);
-      const col=(s.deploy_blocking||0)>0?"var(--crit)":"var(--ok)";
-      return `<div class="bar" tabindex="0" role="img" aria-label="${esc(s.created_at)}: ${esc(String(s.deploy_blocking||0))} blocking" title="${esc(s.created_at)}: ${esc(String(s.deploy_blocking||0))} blocking" style="height:${h}px;background:${col}"></div>`;}).join("")||'<span class="muted">No scans yet.</span>';
-    $("#history tbody").innerHTML=scans.map(s=>`<tr class="scan" data-id="${s.id}" tabindex="0" role="button" title="View scan details">
+    const max=Math.max(1,...ord.map(s=>count(s.deploy_blocking)));
+    $("#trend").innerHTML=ord.map(s=>{const db=count(s.deploy_blocking);const h=Math.round(6+(db/max)*54);
+      const col=db>0?"var(--crit)":"var(--ok)";
+      return `<div class="bar" tabindex="0" role="img" aria-label="${esc(s.created_at)}: ${db} blocking" title="${esc(s.created_at)}: ${db} blocking" style="height:${h}px;background:${col}"></div>`;}).join("")||'<span class="muted">No scans yet.</span>';
+    $("#history tbody").innerHTML=scans.map(s=>`<tr class="scan" data-id="${esc(s.id)}" tabindex="0" role="button" title="View scan details">
       <td>${esc(s.created_at)}</td><td>${esc(s.repo||"—")}</td><td><code>${esc((s.commit||"—").slice(0,10))}</code></td>
-      <td>${s.total}</td><td>${pill(s.deploy_blocking,"var(--crit)")}</td><td>${pill(s.new_blocking,"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
+      <td>${count(s.total)}</td><td>${pill(count(s.deploy_blocking),"var(--crit)")}</td><td>${pill(count(s.new_blocking),"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
     document.querySelectorAll("tr.scan").forEach(tr=>{
       tr.onclick=()=>detail(tr.dataset.id,tr);
       tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); detail(tr.dataset.id,tr); } });
@@ -155,9 +156,9 @@ async function detail(id,tr){
   try{
     const s=await api("/api/v1/scans/"+id);
     if(requestId!==currentDetailRequest)return;
-    const rows=(s.findings||[]).map(f=>`<tr><td><span class="pill" style="background:${SEV[f.severity]||'var(--info)'}">${esc(f.severity)}</span></td>
+    const rows=(s.findings||[]).map(f=>{const severityKey=String(f.severity).toUpperCase(); return `<tr><td><span class="pill" style="background:${Object.hasOwn(SEV,severityKey)?SEV[severityKey]:'var(--info)'}">${esc(f.severity)}</span></td>
       <td><code>${esc(f.rule_id)}</code></td><td>${esc((f.message||"").split("\n")[0].slice(0,120))}</td>
-      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`).join("");
+      <td><code>${esc(f.file)}:${esc(f.line)}</code></td></tr>`;}).join("");
     d.innerHTML=`<button type="button" class="close-btn" aria-label="Close details">✕</button><strong>Scan #${esc(s.id)}</strong> <span class="muted">${esc(s.created_at)} · ${esc(s.repo||"—")}</span>
       <table style="margin-top:8px"><thead><tr><th scope="col">Severity</th><th scope="col">Rule</th><th scope="col">Finding</th><th scope="col">Location</th></tr></thead>
       <tbody>${rows||'<tr><td colspan="4" class="muted">No findings.</td></tr>'}</tbody></table>`;
