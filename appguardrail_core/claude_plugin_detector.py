@@ -1899,12 +1899,28 @@ def _shell_command_context_start(line: str, offset: int) -> int | None:
     return None if quote else frame_start
 
 
-def _executable_command_match(
-    content: str, pattern: re.Pattern[str]
+def _match_starts_in_shell_assignment_value(segment: str, offset: int) -> bool:
+    """Return whether ``offset`` starts inside an unquoted assignment word.
+
+    Args:
+        segment: One shell command segment.
+        offset: Zero-based match offset within ``segment``.
+
+    Returns:
+        True when the current shell word before ``offset`` contains ``=``.
+        An assignment followed by whitespace and a real command returns False.
+    """
+    prefix = segment[:offset]
+    if not prefix or prefix[-1].isspace():
+        return False
+    return "=" in prefix.rsplit(maxsplit=1)[-1]
+
+
+def _executable_command_match(    content: str, pattern: re.Pattern[str]
 ) -> re.Match[str] | None:
     """Return the first regex match that is an executable command context.
 
-    Unquoted ``#`` comments, quoted prose, and
+    Unquoted ``#`` comments, quoted prose, shell assignment values, and
     ``echo``/``printf``/``print`` segments are not executable. Direct
     commands inside ``$(...)`` or backticks remain executable.
 
@@ -1934,8 +1950,12 @@ def _executable_command_match(
             continue
         for segment_start, segment_end in _iter_unquoted_segment_bounds(context):
             if segment_start <= context_relative < segment_end:
+                segment = context[segment_start:segment_end]
+                segment_relative = context_relative - segment_start
                 if not _is_reporting_builtin_segment(
-                    context[segment_start:segment_end]
+                    segment
+                ) and not _match_starts_in_shell_assignment_value(
+                    segment, segment_relative
                 ):
                     return match
                 break
