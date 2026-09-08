@@ -1,3 +1,3 @@
-# Gap baseline snapshot 2026-09-08 05:25 UTC
+# Gap baseline snapshot 2026-09-08 06:05 UTC
 
-Records live exact-head evidence for the commercial-readiness loop: #1036 skill-supply-chain repairs; #1173 structural command-context RED/GREEN; non-force, zero-behind #1174-#1177 stack integration; #1179 S3 direction and later-write regressions; #1180 registry-publish inheritance; and the canonical fail-closed assurance-state mapping. This documents Proposed work and exact candidate evidence, not a protected capability, approval, release, or certification claim.
+Records live exact-head evidence for the commercial-readiness loop: #1036 skill-supply-chain repairs; #1173 structural command-context RED/GREEN; non-force, zero-behind #1174-#1177 stack integration; #1179 S3 direction and later-write regressions; #1180 registry-publish inheritance; the canonical fail-closed assurance-state mapping; and the #1131/#1181 dashboard file-picker ownership, duplicate-doctrine, and browser-evidence boundary. This documents Proposed work and exact candidate evidence, not a protected capability, approval, release, or certification claim.
