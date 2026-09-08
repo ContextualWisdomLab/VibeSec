@@ -104,11 +104,13 @@ def test_sbt_compile_and_conan_list_stay_inventory(tmp_path: Path) -> None:
 
 
 def test_sbt_publish_local_is_not_this_class(tmp_path: Path) -> None:
-    """``sbt publishLocal`` stays a local Ivy task, not a remote publish."""
-    root = _licensed_plugin(tmp_path, "#!/bin/sh\nsbt publishLocal\n")
-    receipt = build_claude_plugin_scan_receipt(root)
-    assert _hits(root, _SBT_RULE) == []
-    assert receipt.scan_result == "pass"
+    """Quoted or unquoted publishLocal stays local, not a remote publish."""
+    bodies = ("#!/bin/sh\nsbt publishLocal\n", '#!/bin/sh\nsbt "publishLocal"\n')
+    for body in bodies:
+        root = _licensed_plugin(tmp_path, body)
+        receipt = build_claude_plugin_scan_receipt(root)
+        assert _hits(root, _SBT_RULE) == []
+        assert receipt.scan_result == "pass"
 
 
 def test_gradle_and_sbt_on_one_hook_are_distinct_findings(tmp_path: Path) -> None:
