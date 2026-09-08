@@ -145,10 +145,16 @@
   ``helm install`` fails as `claude-plugin-helm-install-command`.
   ``vercel deploy`` fails as `claude-plugin-vercel-deploy-command`.
   ``fly deploy`` and ``flyctl deploy`` fail as
-  `claude-plugin-fly-deploy-command`. Hook comments and
+  `claude-plugin-fly-deploy-command`. ``aws cloudformation deploy``
+  and ``aws deploy create-deployment`` fail as
+  `claude-plugin-aws-deploy-command`. ``gcloud run|app|functions
+  deploy`` fails as `claude-plugin-gcloud-deploy-command`.
+  ``az webapp deploy`` fails as `claude-plugin-az-deploy-command`.
+  Hook comments and
   ``echo``/``printf`` lookalikes are not those classes.
   ``terraform plan``, ``helm list``,
-  ``vercel ls``, and ``fly status``
+  ``vercel ls``, ``fly status``, ``aws s3 ls``, ``gcloud config list``,
+  and ``az account show``
   stay inventory. Hardcoded
   PATs stay `claude-plugin-github-write-token`. Snippets are command
   labels, not tokens.
