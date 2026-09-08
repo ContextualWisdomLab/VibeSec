@@ -367,8 +367,12 @@ _DOCKER_PUSH_COMMAND = re.compile(
     r"\bdocker(?:\s+image)?\s+push\b",
     re.IGNORECASE,
 )
-_TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
-_HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
+_TERRAFORM_APPLY_COMMAND = re.compile(
+    r"\bterraform\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
+_HELM_INSTALL_COMMAND = re.compile(
+    r"\bhelm\s+install(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _REPORTING_BUILTINS: Final = frozenset(
     {":", "echo", "false", "print", "printf", "true"}
 )
