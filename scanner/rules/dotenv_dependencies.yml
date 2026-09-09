@@ -1,0 +1,55 @@
+rules:
+  - id: python-dotenv-runtime-load
+    patterns:
+      - pattern-regex: '^[ \t]*(?:[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:dotenv\.)?(?:load_dotenv|dotenv_values)[ \t]*\('
+    message: |
+      Runtime dotenv loading is present. For the CWL migration, resolve credentials
+      through a released Keyverse contract and keep non-secret settings separate.
+      This is bounded syntax evidence, not proof that secret values were exposed.
+    severity: WARNING
+    languages: [python]
+  - id: python-dotenv-settings-source
+    patterns:
+      - pattern-regex: '^[ \t]*(?:[A-Za-z_]\w*[ \t]*=[ \t]*SettingsConfigDict[ \t]*\([ \t]*)?env_file[ \t]*=[ \t]*["\x27][^"\x27\r\n]{0,256}\.env(?:\.[A-Za-z0-9_-]+)?["\x27]'
+    message: |
+      A settings source explicitly loads a dotenv file. Replace this credential
+      authority with Keyverse and retain non-secret settings in typed configuration.
+      Validate startup and rollback before removing an existing deployment source.
+    severity: WARNING
+    languages: [python]
+  - id: rust-dotenv-runtime-load
+    patterns:
+      - pattern-regex: '^[ \t]*(?:let[ \t]+[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:dotenvy|dotenv)::(?:dotenv|from_filename|from_path)[ \t]*\('
+    message: |
+      A Rust runtime loads dotenv content. Use the released Keyverse credential
+      port with workload identity; do not substitute environment fallback on failure.
+      Imported libraries alone are not an executed loader finding.
+    severity: WARNING
+    languages: [rust]
+  - id: node-dotenv-runtime-load
+    patterns:
+      - pattern-regex: '^[ \t]*(?:dotenv[ \t]*\.[ \t]*config[ \t]*\(|require[ \t]*\([ \t]*["\x27]dotenv["\x27][ \t]*\)[ \t]*\.[ \t]*config[ \t]*\(|require[ \t]*\([ \t]*["\x27]dotenv/config["\x27][ \t]*\)|import[ \t]*["\x27]dotenv/config["\x27])'
+    message: |
+      A Node runtime invokes dotenv or imports its automatic loader. Move server
+      credentials to Keyverse; never place resolved values in browser bundles.
+      This rule covers the declared direct syntax, not arbitrary import aliases.
+    severity: WARNING
+    languages: [javascript, typescript]
+  - id: shell-dotenv-source
+    patterns:
+      - pattern-regex: '^[ \t]*(?:source|\.)[ \t]+["\x27]?(?:[^"\x27\r\n#;]{0,256}/)?\.env(?:\.[A-Za-z0-9_-]+)?(?=["\x27\s;]|$)'
+    message: |
+      A shell sources dotenv content as executable configuration. Use approved
+      Keyverse bootstrap and credential resolution rather than sourcing secret files.
+      Confirm the deployment owner and recovery path before retiring the loader.
+    severity: WARNING
+    languages: [generic]
+  - id: compose-dotenv-transport
+    patterns:
+      - pattern-regex: '^[ \t]*(?:env_file[ \t]*:[ \t]*(?:\[[ \t]*|\r?\n[ \t]*-[ \t]*)?["\x27]?[^"\x27\r\n#]{0,256}\.env(?:\.[A-Za-z0-9_-]+)?(?=["\x27\s\],]|$)|(?:[A-Za-z_]\w*[ \t]*:?=[ \t]*)?(?:docker|podman)[ \t]+(?:compose|run)[^\r\n#]{0,256}--env-file(?:[ \t]+|=)["\x27]?[^"\x27\r\n#]{0,256}\.env(?:\.[A-Za-z0-9_-]+)?(?=["\x27\s;]|$))'
+    message: |
+      A container invocation explicitly depends on a dotenv file. Adopt the released
+      Keyverse credential contract and a non-secret deployment descriptor instead.
+      This is migration inventory; it does not establish complete secret coverage.
+    severity: WARNING
+    languages: [generic]
