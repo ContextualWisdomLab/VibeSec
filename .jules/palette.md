@@ -81,3 +81,7 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+
+## 2024-05-19 - console.html pointer-events anti-pattern
+**Learning:** Relying solely on CSS `pointer-events: none` to disable interactions is an accessibility anti-pattern because it fails to prevent keyboard interactions (Enter/Space). Always pair visual CSS disabling with semantic state management, such as the `disabled` attribute for native buttons or `aria-disabled="true"`/`aria-busy="true"` combined with JS event guards (`if (el.getAttribute('aria-busy') === 'true') return;`) for non-native elements.
+**Action:** Implemented JS event guards in click and keydown listeners alongside CSS `pointer-events: none` and `opacity: 0.6` for loading states on `tr.scan` rows.
