@@ -28,6 +28,7 @@ def loaded_rules():
     ("python-dotenv-runtime-load", "load_dotenv()"),
     ("python-dotenv-runtime-load", "    dotenv.load_dotenv(override=True)"),
     ("python-dotenv-runtime-load", 'settings = dotenv_values(".env")'),
+    ("python-dotenv-runtime-load", 'values: dict[str, str] = dotenv_values(".env")'),
     ("python-dotenv-runtime-load", "values = dotenv.dotenv_values()"),
     ("python-dotenv-settings-source", '    env_file=".env",'),
     ("python-dotenv-settings-source", 'model_config = SettingsConfigDict(env_file="../.env")'),
