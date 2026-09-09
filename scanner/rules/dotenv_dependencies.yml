@@ -19,7 +19,7 @@ rules:
     languages: [python]
   - id: rust-dotenv-runtime-load
     patterns:
-      - pattern-regex: '^[ \t]*(?:let[ \t]+[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:dotenvy|dotenv)::(?:dotenv|from_filename|from_path)[ \t]*\('
+      - pattern-regex: '^[ \t]*(?:let[ \t]+(?:mut[ \t]+)?[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:dotenvy|dotenv)::(?:dotenv|from_filename|from_path)[ \t]*\('
     message: |
       A Rust runtime loads dotenv content. Use the released Keyverse credential
       port with workload identity; do not substitute environment fallback on failure.
