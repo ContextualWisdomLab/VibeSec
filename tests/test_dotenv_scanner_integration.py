@@ -6,6 +6,11 @@ from scanner.cli.appguardrail import SCAN_RULES, _scan_file
 
 @pytest.mark.parametrize("rule_id,file_name,source", [
     ("python-dotenv-runtime-load", "runtime_config.py", "load_dotenv()\n"),
+    (
+        "python-dotenv-runtime-load",
+        "typed_runtime_config.py",
+        'values: dict[str, str] = dotenv_values(".env")\n',
+    ),
     ("python-dotenv-settings-source", "runtime_settings.py", 'env_file=".env"\n'),
     ("rust-dotenv-runtime-load", "runtime_config.rs", "dotenvy::dotenv().ok();\n"),
     ("node-dotenv-runtime-load", "runtime_config.js", "require('dotenv').config();\n"),
