@@ -302,3 +302,48 @@ def test_dashboard_search_escape_clears_input():
     assert "e.key === 'Escape'" in html
     assert "query = '';" in html
     assert "render();" in html
+
+def test_dashboard_external_links_have_accessible_visual_indicator():
+    """External links opening in new tabs must have both an assistive warning and a visual indicator (WCAG G201)."""
+    from html.parser import HTMLParser
+    import re
+
+    html = dashboard_index_path().read_text(encoding="utf-8")
+
+    # Verify the global description element exists
+    assert '<span id="ext-link-desc" class="sr-only">opens in a new tab</span>' in html
+
+    refs_markup = re.search(
+        r"const refs\s*=\s*\(f\.references\|\|\[\]\)\.map\(r=>`(?P<markup>.*?)`\)\.join\('<br>'\);",
+        html,
+        flags=re.DOTALL,
+    )
+    assert refs_markup is not None
+
+    class _LinkAttributeParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.links = []
+            self.svgs = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag == "a":
+                self.links.append(dict(attrs))
+            if tag == "svg":
+                self.svgs.append(dict(attrs))
+
+    parser = _LinkAttributeParser()
+    # Inject a dummy href to make the template string parseable HTML
+    test_html = refs_markup.group("markup").replace('${esc(safeUrl(r))}', 'https://example.com').replace('${esc(r)}', 'Link').replace('${extIcon}', '<svg aria-hidden="true" focusable="false"></svg>')
+    parser.feed(test_html)
+
+    assert len(parser.links) == 1
+    link = parser.links[0]
+    assert link.get("target") == "_blank"
+    assert link.get("rel") == "noopener"
+    assert link.get("aria-describedby") == "ext-link-desc"
+
+    assert len(parser.svgs) >= 1
+    svg = parser.svgs[0]
+    assert svg.get("aria-hidden") == "true"
+    assert svg.get("focusable") == "false"
