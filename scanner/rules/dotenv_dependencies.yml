@@ -1,7 +1,7 @@
 rules:
   - id: python-dotenv-runtime-load
     patterns:
-      - pattern-regex: '^[ \t]*(?:[A-Za-z_]\w*[ \t]*=[ \t]*)?(?:dotenv\.)?(?:load_dotenv|dotenv_values)[ \t]*\('
+      - pattern-regex: '^[ \t]*(?:[A-Za-z_]\w*(?:[ \t]*:[ \t]*[^=\r\n]{1,128})?[ \t]*=[ \t]*)?(?:dotenv\.)?(?:load_dotenv|dotenv_values)[ \t]*\('
     message: |
       Runtime dotenv loading is present. For the CWL migration, resolve credentials
       through a released Keyverse contract and keep non-secret settings separate.
