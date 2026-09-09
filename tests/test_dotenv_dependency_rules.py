@@ -36,6 +36,7 @@ def loaded_rules():
     ("python-dotenv-settings-source", '    env_file = "~/.env.production"'),
     ("rust-dotenv-runtime-load", "    dotenvy::dotenv().ok();"),
     ("rust-dotenv-runtime-load", 'let _ = dotenv::from_filename(".env");'),
+    ("rust-dotenv-runtime-load", 'let mut loaded = dotenvy::dotenv();'),
     ("rust-dotenv-runtime-load", 'dotenvy::from_path("private.env")?;'),
     ("node-dotenv-runtime-load", "dotenv.config();"),
     ("node-dotenv-runtime-load", "require('dotenv').config();"),
