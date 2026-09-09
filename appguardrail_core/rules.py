@@ -104,9 +104,6 @@ class RuleMetadata:
         }
 
 
-_OVERRIDES_ITEMS = tuple(REFERENCE_CATEGORY_OVERRIDES.items())
-
-
 def extract_public_references(message: str) -> tuple[str, ...]:
     """Extract OWASP, CWE, and CVE references already embedded in rule copy."""
     if not message or "[" not in message:
@@ -122,7 +119,7 @@ def extract_public_references(message: str) -> tuple[str, ...]:
 def _category_for_references(references: tuple[str, ...], fallback: str) -> str:
     """Prefer an authoritative public taxonomy over a rule-id heuristic."""
     for reference in references:
-        for prefix, category in _OVERRIDES_ITEMS:
+        for prefix, category in REFERENCE_CATEGORY_OVERRIDES.items():
             if reference.startswith(prefix):
                 return category
     return fallback

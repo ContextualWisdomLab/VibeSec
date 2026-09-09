@@ -78,6 +78,6 @@
 **Learning:** `build_rule_metadata` derives exactly two collections, `owasp` and `cwe`, from the same references. Replacing its two generator traversals with one explicit loop reduces element visits from about 2N to N. Both versions remain O(N), so this is a constant-factor optimization rather than an asymptotic complexity improvement.
 **Action:** Combine repeated traversal when fixed derived collections share one source, while preserving ordering and classification semantics. Benchmark the production hot path before claiming a material wall-clock improvement.
 
-## 2024-11-20 - Fast-path pre-filters and tuple caching in hot loops
-**Learning:** In hot loops constructing metadata (like `build_rule_metadata`), `re.finditer` allocations and `dict.items()` dictionary view allocations add up significantly. Furthermore, a simple substring check (like `"[" not in message`) is much faster than running a regex on an empty or non-matching string.
-**Action:** Extract constant dictionary views to module-level variables (e.g., `_OVERRIDES_ITEMS = tuple(OVERRIDES.items())`) and implement fast-path string checks before running regular expressions to bypass iterator allocations.
+## 2024-11-20 - Fast-path pre-filters in regex-heavy hot loops
+**Learning:** In hot loops constructing metadata (like `build_rule_metadata`), `re.finditer` allocations add up significantly. A simple substring check (like `"[" not in message`) is much faster than running a regex on an empty or non-matching string. However, extracting dictionary views (like `.items()`) into global tuples is an anti-pattern that provides negligible wall-clock benefit in modern Python and reduces code clarity.
+**Action:** Implement fast-path string checks before running regular expressions to bypass iterator allocations, but avoid aggressive dictionary-view micro-optimizations that harm readability.
