@@ -31,6 +31,7 @@ def loaded_rules():
     ("python-dotenv-runtime-load", "values = dotenv.dotenv_values()"),
     ("python-dotenv-settings-source", '    env_file=".env",'),
     ("python-dotenv-settings-source", 'model_config = SettingsConfigDict(env_file="../.env")'),
+    ("python-dotenv-settings-source", 'model_config = SettingsConfigDict(\n    env_file=".env",\n)'),
     ("python-dotenv-settings-source", '    env_file = "~/.env.production"'),
     ("rust-dotenv-runtime-load", "    dotenvy::dotenv().ok();"),
     ("rust-dotenv-runtime-load", 'let _ = dotenv::from_filename(".env");'),
