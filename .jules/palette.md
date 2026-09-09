@@ -1,5 +1,5 @@
 ## 2024-05-19 - Init Command UX Improvement
-**Learning:** CLI outputs with inline repetitive warnings (e.g. `already contains rules — skipping`) can clutter terminal visibility and diminish developer experience.
+**Learning:** CLI outputs with inline repetitive warnings (e.g., `already contains rules — skipping`) can clutter terminal visibility and diminish developer experience.
 **Action:** Group skipped/unchanged files separately from modified ones (e.g., in a single `Skipped (already configured):` section) to create clean, scannable terminal output.
 
 ## 2024-07-12 - Native Dialog Backdrop Pattern
@@ -81,7 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-
-## 2026-08-15 - Proxy file input for accessibility
-**Learning:** Native file inputs (`<input type="file">`) can sometimes conflict with other accessible components, and replacing them with proxy `<button>` elements improves the styling flexibility while maintaining accessibility if "label-in-name" principles are applied. The visually hidden native input shouldn't have duplicate accessible names if the proxy element clearly labels the action.
-**Action:** When creating a proxy file input pattern, give the visual `<button>` a descriptive name (e.g. "Upload findings file") and remove redundant `aria-label` attributes on the native input while using the `hidden` attribute to visually hide it.
