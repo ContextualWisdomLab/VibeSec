@@ -81,7 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-
-## 2026-08-15 - target="_blank" Link Warnings
-**Learning:** External links that open in a new tab (`target="_blank"`) can disorient users, particularly those using screen readers, if they are not explicitly warned beforehand. Relying solely on a visually hidden text or a visual icon is insufficient for complete accessibility compliance (WCAG G201).
-**Action:** When using `target="_blank"` for external links, always provide both a visual indicator (like an external link SVG icon) and an assistive-technology warning (like visually hidden text `(opens in a new tab)` linked via `aria-describedby`).
