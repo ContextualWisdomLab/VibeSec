@@ -174,14 +174,8 @@ def validate_rule_metadata(metadata: RuleMetadata | dict[str, Any]) -> list[str]
 
 
 def _merge_references(*groups: tuple[str, ...]) -> tuple[str, ...]:
-    # ⚡ Bolt: 제너레이터 표현식의 dict.fromkeys() 대신 set을 활용하여 성능 향상 (순서 보존)
-    seen = set()
-    result = []
-    seen_add = seen.add
-    result_append = result.append
-    for group in groups:
-        for reference in group:
-            if reference and reference not in seen:
-                seen_add(reference)
-                result_append(reference)
-    return tuple(result)
+    return tuple(
+        dict.fromkeys(
+            reference for group in groups for reference in group if reference
+        )
+    )
