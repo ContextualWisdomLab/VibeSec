@@ -137,9 +137,7 @@ def _drift_fp(finding: dict[str, Any]) -> str:
 
 def set_webhook(conn: sqlite3.Connection, org_id: int, url: "str | None") -> None:
     """Set (or clear) the org's drift-alert webhook URL."""
-    if url == "":
-        url = None
-    conn.execute("UPDATE orgs SET webhook_url = ? WHERE id = ?", (url, org_id))
+    conn.execute("UPDATE orgs SET webhook_url = ? WHERE id = ?", (url or None, org_id))
     conn.commit()
 
 
