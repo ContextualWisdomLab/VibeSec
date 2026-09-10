@@ -28,6 +28,15 @@ def test_extract_public_references_deduplicates_in_first_seen_order():
     )
 
 
+def test_extract_public_references_returns_empty_for_reference_negative_messages():
+    assert extract_public_references("") == ()
+    assert extract_public_references("참조 표기가 없는 일반 보안 진단 메시지") == ()
+
+
+def test_extract_public_references_does_not_treat_arbitrary_brackets_as_references():
+    assert extract_public_references("배열 표기 [alpha, beta]는 공개 보안 참조가 아닙니다.") == ()
+
+
 def test_build_rule_metadata_adds_defaults_for_category():
     metadata = build_rule_metadata(
         "hardcoded-api-credential",
