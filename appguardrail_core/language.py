@@ -120,9 +120,10 @@ def detect_language_axes(files: Iterable[str | Path]) -> set[str]:
 
 def detect_stack_profile(files: Iterable[str | Path]) -> StackProfile:
     """Infer the most helpful zero-config scan profile for beginner users."""
+    # ⚡ Bolt: Check isinstance(str) before Path ABC for faster list comprehension
     files_list = list(files) if not isinstance(files, (list, set, tuple)) else files
     paths = [
-        str(file_path) if isinstance(file_path, Path) else file_path
+        file_path if isinstance(file_path, str) else str(file_path)
         for file_path in files_list
     ]
     languages = detect_language_axes(paths)
