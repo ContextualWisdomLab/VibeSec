@@ -37,3 +37,11 @@ def test_console_detail_scrolling_respects_reduced_motion():
     assert "element.scrollIntoView();" in html
     assert 'element.scrollIntoView({behavior:"smooth"});' in html
     assert html.count("scrollDetailIntoView(d);") == 2
+
+def test_console_table_rows_block_interaction_while_busy():
+    """Interactive rows must disable pointer events and explicitly guard click handlers while loading."""
+    html = _console_html()
+
+    assert 'tr.scan[aria-busy="true"]{pointer-events:none' in html
+    assert 'opacity:0.6' in html
+    assert 'if(tr.getAttribute("aria-busy")==="true")return;' in html
