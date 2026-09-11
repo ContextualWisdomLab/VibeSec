@@ -81,7 +81,3 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
-
-## 2024-05-24 - External Link Accessibility
-**Learning:** To comply with WCAG G201 for `target="_blank"` external links, visually hidden text alone is insufficient. Both an assistive-technology warning (e.g., hidden text via `aria-describedby`) and a visible warning (e.g., an external link SVG icon) must be explicitly provided.
-**Action:** Always add an external link icon and an `aria-describedby` warning pointing to visually hidden text when creating `target="_blank"` links.
