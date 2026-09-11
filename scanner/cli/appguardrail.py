@@ -1648,6 +1648,8 @@ def _is_safe_url(url: str) -> bool:
         return False
 
     host = (parsed.hostname or "").lower()
+    if not host:
+        return False
     raw = host.split("%", 1)[0].strip("[]")
 
     def is_bad_ip(ip) -> bool:

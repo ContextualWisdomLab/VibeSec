@@ -124,3 +124,9 @@ def test_safe_redirect_handler_allows_public_https(monkeypatch):
         None, None, 302, "Found", None, "https://hooks.example.com/alert"
     )
     assert result is sentinel
+
+def test_is_safe_url_empty_hostname():
+    assert not _is_safe_url("http://")
+    assert not _cli_is_safe_url("http://")
+    assert not _is_safe_url("http://user@")
+    assert not _cli_is_safe_url("http://user@")
