@@ -37,3 +37,23 @@ def test_console_detail_scrolling_respects_reduced_motion():
     assert "element.scrollIntoView();" in html
     assert 'element.scrollIntoView({behavior:"smooth"});' in html
     assert html.count("scrollDetailIntoView(d);") == 2
+
+
+def test_console_table_rows_block_interaction_while_busy():
+    """Busy row buttons must expose disabled semantics and reject activation."""
+    html = _console_html()
+
+    assert 'tr.scan[aria-disabled="true"]{pointer-events:none' in html
+    assert 'opacity:0.6' in html
+    assert 'tr.setAttribute("aria-disabled","true");' in html
+    assert (
+        'tr.onclick=()=>{ if(tr.getAttribute("aria-disabled")==="true")return; '
+        'detail(tr.dataset.id,tr); };'
+    ) in html
+    assert (
+        "tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') "
+        '{ e.preventDefault(); if(tr.getAttribute("aria-disabled")==="true")return; '
+        'detail(tr.dataset.id,tr); } });'
+    ) in html
+    assert 'lastDetailFocus.removeAttribute("aria-disabled");' in html
+    assert 'tr.removeAttribute("aria-disabled");' in html

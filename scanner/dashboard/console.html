@@ -36,6 +36,7 @@
   th{font-size:11px;color:var(--muted);text-transform:uppercase}
   tr.scan{cursor:pointer}
   tr.scan:hover{background:var(--bg)}
+  tr.scan[aria-disabled="true"]{pointer-events:none;opacity:0.6}
   input:focus-visible, button:focus-visible, tr.scan:focus-visible, .bar:focus-visible, #detail:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   .close-btn{float:right;border:0;background:transparent;font-size:16px;cursor:pointer;color:var(--muted);padding:0 4px;margin-top:-2px}
   .close-btn:hover{color:var(--text)}
@@ -88,6 +89,7 @@ function closeDetail(){
   detail.innerHTML="";
   if(lastDetailFocus instanceof HTMLElement && lastDetailFocus.isConnected){
     lastDetailFocus.removeAttribute("aria-busy");
+    lastDetailFocus.removeAttribute("aria-disabled");
     delete lastDetailFocus.dataset.detailRequest;
     lastDetailFocus.focus();
   }
@@ -135,8 +137,8 @@ async function load(){
       <td>${esc(s.created_at)}</td><td>${esc(s.repo||"—")}</td><td><code>${esc((s.commit||"—").slice(0,10))}</code></td>
       <td>${s.total}</td><td>${pill(s.deploy_blocking,"var(--crit)")}</td><td>${pill(s.new_blocking,"var(--high)")}</td></tr>`).join("")||'<tr><td colspan="6" class="muted">No scans. POST to /api/v1/scans from CI.</td></tr>';
     document.querySelectorAll("tr.scan").forEach(tr=>{
-      tr.onclick=()=>detail(tr.dataset.id,tr);
-      tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); detail(tr.dataset.id,tr); } });
+      tr.onclick=()=>{ if(tr.getAttribute("aria-disabled")==="true")return; detail(tr.dataset.id,tr); };
+      tr.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if(tr.getAttribute("aria-disabled")==="true")return; detail(tr.dataset.id,tr); } });
     });
   }catch(e){ $("#msg").classList.remove("hidden");$("#app").classList.add("hidden");
     $("#msg").innerHTML=`<span class="err">${esc(e.message)}</span>`; }
@@ -149,6 +151,7 @@ async function detail(id,tr){
   if(tr){
     tr.dataset.detailRequest=String(requestId);
     tr.setAttribute("aria-busy","true");
+    tr.setAttribute("aria-disabled","true");
   }
   d.classList.remove("hidden");
   d.innerHTML='<div aria-live="polite" class="muted">Loading scan details...</div>';
@@ -173,6 +176,7 @@ async function detail(id,tr){
   }finally{
     if(tr&&tr.dataset.detailRequest===String(requestId)){
       tr.removeAttribute("aria-busy");
+      tr.removeAttribute("aria-disabled");
       delete tr.dataset.detailRequest;
     }
   }
