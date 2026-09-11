@@ -47,4 +47,5 @@ def test_console_table_rows_block_interaction_while_busy():
     assert 'opacity:0.6' in html
     assert 'tr.setAttribute("aria-disabled","true");' in html
     assert 'if(tr.getAttribute("aria-disabled")==="true")return;' in html
-    assert html.count('tr.removeAttribute("aria-disabled");') == 2
+    assert 'lastDetailFocus.removeAttribute("aria-disabled");' in html
+    assert 'tr.removeAttribute("aria-disabled");' in html
