@@ -58,7 +58,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from appguardrail_core.config import load_config
-from appguardrail_core.controlplane import SafeRedirectHandler
 from appguardrail_core.pinned_https import (
     DestinationValidationError,
     PinnedHTTPSFailure,
