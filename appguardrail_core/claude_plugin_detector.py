@@ -8,6 +8,7 @@ executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, secret copied into a prompt, log, or subprocess environment,
+secret copied into MCP env, args, command, URL, or headers,
 a non-standard JSON constant, malformed UTF-8 JSON bytes, a
 non-NFC identity name, conflicting plugin/skill/command identity,
 undeclared vendored or generated third-party
@@ -189,6 +190,11 @@ CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE: Final = (
     "and child process env dicts. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
+CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE: Final = (
+    "Claude plugin copies a named secret into an MCP server env, args, "
+    "command, URL, or header. Keep credentials out of MCP declarations. "
+    "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
+)
 CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE: Final = (
     "Claude plugin hook or package lifecycle script downloads an unsigned "
     "executable and makes it runnable. Pin and verify binaries; do not "
@@ -257,9 +263,12 @@ _NAMED_SECRET_NAMES: Final = (
 )
 _NAMED_SECRET_TOKEN = re.compile(_NAMED_SECRET_NAMES, re.IGNORECASE)
 _SECRET_REF = re.compile(
-    r"(?:\$(?:\{)?"
+    r"(?:\$(?:"
     + _NAMED_SECRET_NAMES
-    + r"(?:\})?|"
+    + r")(?![A-Za-z0-9_])|"
+    r"\$\{(?:"
+    + _NAMED_SECRET_NAMES
+    + r")(?:\:-[^}]*)?\}|"
     r"os\.environ\s*\[\s*['\"](?:"
     + _NAMED_SECRET_NAMES
     + r")['\"]\s*\]|"
@@ -1473,6 +1482,7 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
                 )
             )
     hits.extend(_mcp_hits(payload, content))
+    hits.extend(_secret_to_mcp_hits(payload, content))
     hits.extend(_normalized_name_hits(payload, content))
     hits.extend(_conflicting_entry_name_hits(payload, content))
     secret = _PROVIDER_SECRET.search(content)
@@ -1572,6 +1582,98 @@ def _mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
             )
         )
     return tuple(hits)
+
+
+def _mcp_secret_reference_token(value: object) -> str | None:
+    """Return the named secret from an actual MCP environment reference."""
+    if not isinstance(value, str):
+        return None
+    reference = _SECRET_REF.search(value)
+    if reference is None:
+        return None
+    match = _NAMED_SECRET_TOKEN.search(reference.group(0))
+    return match.group(0) if match is not None else None
+
+
+def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
+    """Return hits when an MCP execution field carries a named secret.
+
+    Curl/wget/fetch copies stay the network class. Prompt and log copies
+    stay the prompt class. Snippets are the env name only.
+
+    Args:
+        payload: Parsed MCP or plugin JSON.
+        content: Original manifest text for line numbers.
+
+    Returns:
+        Zero or one secret-to-MCP hit.
+    """
+    if not isinstance(payload, dict):
+        return ()
+    servers = payload.get("mcpServers") or payload.get("mcp_servers")
+    if not isinstance(servers, dict) or not servers:
+        return ()
+    for _name, server in servers.items():
+        if not isinstance(server, dict):
+            continue
+        env = server.get("env")
+        if isinstance(env, dict):
+            for key, value in env.items():
+                token = (
+                    key
+                    if isinstance(key, str)
+                    and _NAMED_SECRET_TOKEN.fullmatch(key) is not None
+                    else None
+                )
+                if token is None:
+                    token = _mcp_secret_reference_token(value)
+                if token is not None:
+                    return (
+                        PluginHit(
+                            rule_id="claude-plugin-secret-to-mcp",
+                            line=_line_of(content, token),
+                            snippet=token,
+                            message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                        ),
+                    )
+        args = server.get("args")
+        if isinstance(args, list):
+            for arg in args:
+                token = _mcp_secret_reference_token(arg)
+                if token is not None:
+                    return (
+                        PluginHit(
+                            rule_id="claude-plugin-secret-to-mcp",
+                            line=_line_of(content, token),
+                            snippet=token,
+                            message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                        ),
+                    )
+        for field_name in ("command", "url"):
+            token = _mcp_secret_reference_token(server.get(field_name))
+            if token is not None:
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-secret-to-mcp",
+                        line=_line_of(content, token),
+                        snippet=token,
+                        message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                    ),
+                )
+        headers = server.get("headers")
+        if isinstance(headers, dict):
+            for value in headers.values():
+                token = _mcp_secret_reference_token(value)
+                if token is not None:
+                    return (
+                        PluginHit(
+                            rule_id="claude-plugin-secret-to-mcp",
+                            line=_line_of(content, token),
+                            snippet=token,
+                            message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                        ),
+                    )
+    return ()
 
 
 def _normalized_name_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
