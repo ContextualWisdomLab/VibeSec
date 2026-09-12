@@ -12,10 +12,15 @@
   receipt binds `capability_inventory_sha256` over canonical JSON without
   secret literals. Undeclared executable surfaces that appear after manifest
   inventory fail admission. `pass` means the exact tree satisfied the exact
-  AppGuardrail policy, not activation. Retained receipts fail closed on a
-  wrong artifact digest, wrong scanner policy digest, stale catalog, source,
-  or marketplace identity, or replay against mutated bytes; verification is
-  not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
+  AppGuardrail policy, not activation. Receipts bind `policy_provenance`
+  (`schema_version`, `source_repository` identity
+  `ContextualWisdomLab/appguardrail`, `scanner_release_version` from the
+  existing scanner version, and the same `scanner_policy_sha256` digest)
+  to the exact AppGuardrail release and scan-policy bytes. Retained
+  receipts fail closed on a wrong artifact digest, wrong scanner policy
+  digest, disagreeing scanner version, swapped provenance, stale catalog,
+  source, or marketplace identity, or replay against mutated bytes;
+  verification is not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
   admission as policy findings; `gh issue create` and `docker push` stay
   inventory evidence. Secret references require a complete environment-variable

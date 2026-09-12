@@ -28,7 +28,10 @@ divided by compressed size exceeds the bounded ratio, or nested archives
 beyond a small depth, fail admission without extracting the payload.
 A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
-not hook scans.
+not hook scans. Receipts bind ``policy_provenance`` to the running
+AppGuardrail release and the exact scan-policy bytes; verification fails
+closed when that digest or scanner version disagrees. ``scan_result=pass``
+is not Noema admission.
 """
 
 from __future__ import annotations
@@ -270,6 +273,8 @@ _CONCEALED_CHAR = re.compile(
 )
 _SCANNER_NAME: Final = "appguardrail"
 _SCANNER_VERSION: Final = "0.1.1"
+_POLICY_PROVENANCE_SCHEMA_VERSION: Final = "1"
+_SCANNER_SOURCE_REPOSITORY: Final = "ContextualWisdomLab/appguardrail"
 
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
@@ -558,6 +563,29 @@ class PluginHit:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyProvenance:
+    """Bounded binding of one scan to the AppGuardrail release and policy bytes.
+
+    This is not an SPDX SBOM and is not Noema admission. Fields never contain
+    secrets, tokens, or unbounded plugin text.
+    """
+
+    schema_version: str
+    source_repository: str
+    scanner_release_version: str
+    scanner_policy_sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        """Return JSON-safe provenance without secret literals."""
+        return {
+            "schema_version": self.schema_version,
+            "source_repository": self.source_repository,
+            "scanner_release_version": self.scanner_release_version,
+            "scanner_policy_sha256": self.scanner_policy_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PluginScanReceipt:
     """Bounded deterministic receipt for one Claude plugin artifact scan."""
 
@@ -565,6 +593,7 @@ class PluginScanReceipt:
     scanner_name: str
     scanner_version: str
     scanner_policy_sha256: str
+    policy_provenance: PolicyProvenance
     catalog_repository: str
     catalog_commit_sha: str
     marketplace_blob_sha: str
@@ -592,6 +621,7 @@ class PluginScanReceipt:
             "scanner_name": self.scanner_name,
             "scanner_version": self.scanner_version,
             "scanner_policy_sha256": self.scanner_policy_sha256,
+            "policy_provenance": self.policy_provenance.as_dict(),
             "catalog_repository": self.catalog_repository,
             "catalog_commit_sha": self.catalog_commit_sha,
             "marketplace_blob_sha": self.marketplace_blob_sha,
@@ -943,7 +973,9 @@ def build_claude_plugin_scan_receipt(
     Returns:
         Receipt whose identity excludes wall-clock fields. ``scan_result`` is
         ``pass`` only when ``.claude-plugin/`` exists and no policy findings
-        remain. Secret literals never appear on the receipt.
+        remain. Secret literals never appear on the receipt. ``policy_provenance``
+        binds the running release and the exact policy digest; it is not a
+        second policy hash and is not Noema admission.
     """
     hits = list(_collect_plugin_hits(root))
     catalog, catalog_is_valid = _receipt_catalog_identity(
@@ -965,7 +997,8 @@ def build_claude_plugin_scan_receipt(
     marketplace_entry_sha256 = _sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     )
-    policy_sha256 = _sha256(Path(__file__).read_bytes())
+    policy_sha256 = _scanner_policy_sha256()
+    provenance = _policy_provenance(policy_sha256)
     inventory = inventory_claude_plugin_capabilities(root)
     capability_inventory_sha256 = _capability_inventory_digest(inventory)
     sarif_sha256 = sarif_document_sha256(
@@ -979,6 +1012,7 @@ def build_claude_plugin_scan_receipt(
         "scanner_name": _SCANNER_NAME,
         "scanner_version": scanner_version,
         "scanner_policy_sha256": policy_sha256,
+        "policy_provenance": provenance.as_dict(),
         "catalog_repository": catalog["catalog_repository"],
         "catalog_commit_sha": catalog["catalog_commit_sha"],
         "marketplace_blob_sha": marketplace_blob_sha,
@@ -1005,7 +1039,12 @@ def build_claude_plugin_scan_receipt(
         scan_started_at=scan_started_at,
         scan_completed_at=scan_completed_at,
         finding_summary=finding_summary,
-        **{key: value for key, value in body.items() if key != "finding_summary"},
+        policy_provenance=provenance,
+        **{
+            key: value
+            for key, value in body.items()
+            if key not in {"finding_summary", "policy_provenance"}
+        },
     )
 
 
@@ -1021,7 +1060,7 @@ def receipt_matches_artifact(receipt: PluginScanReceipt, root: Path) -> bool:
     """
     artifact_sha256, _, _ = _artifact_digest(root)
     return artifact_sha256 == receipt.artifact_sha256 and (
-        receipt.scanner_policy_sha256 == _sha256(Path(__file__).read_bytes())
+        receipt.scanner_policy_sha256 == _scanner_policy_sha256()
     )
 
 
@@ -1072,14 +1111,15 @@ def verify_plugin_scan_receipt(
         Structured mismatch field names. Empty mismatches mean the receipt
         still describes this tree and policy. ``admitted`` is always false:
         ``scan_result=pass`` is not Noema admission. Reasons never include
-        secret literals or raw bidi characters.
+        secret literals or raw bidi characters. A disagreeing policy digest
+        or scanner version fails closed against the running scanner.
     """
     live = build_claude_plugin_scan_receipt(
         root,
         catalog_payload=catalog_payload,
         catalog_bytes=catalog_bytes,
     )
-    current_policy_sha256 = _sha256(Path(__file__).read_bytes())
+    current_policy_sha256 = _scanner_policy_sha256()
     expected = (
         current_policy_sha256
         if expected_policy_sha256 is None
@@ -1093,6 +1133,10 @@ def verify_plugin_scan_receipt(
         or receipt.scanner_policy_sha256 != expected
     ):
         mismatches.append("scanner_policy_sha256")
+    if receipt.scanner_version != _SCANNER_VERSION:
+        mismatches.append("scanner_version")
+    if receipt.policy_provenance != live.policy_provenance:
+        mismatches.append("policy_provenance")
     if receipt.catalog_commit_sha != live.catalog_commit_sha:
         mismatches.append("catalog_commit_sha")
     if receipt.source_commit_sha != live.source_commit_sha:
@@ -2420,6 +2464,21 @@ def _line_of(content: str, token: str) -> int:
 def _sha256(data: bytes) -> str:
     """Return the hex SHA-256 digest of ``data``."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _scanner_policy_sha256() -> str:
+    """Return SHA-256 of the exact detector policy bytes used for this scan."""
+    return _sha256(Path(__file__).read_bytes())
+
+
+def _policy_provenance(policy_sha256: str) -> PolicyProvenance:
+    """Return provenance bound to the running scanner release and policy digest."""
+    return PolicyProvenance(
+        schema_version=_POLICY_PROVENANCE_SCHEMA_VERSION,
+        source_repository=_SCANNER_SOURCE_REPOSITORY,
+        scanner_release_version=_SCANNER_VERSION,
+        scanner_policy_sha256=policy_sha256,
+    )
 
 
 def _walk_entries(root: Path) -> tuple[Path, ...]:

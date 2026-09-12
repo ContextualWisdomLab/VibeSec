@@ -19,6 +19,7 @@ _REQUIRED_RECEIPT_KEYS = (
     "scanner_name",
     "scanner_version",
     "scanner_policy_sha256",
+    "policy_provenance",
     "catalog_repository",
     "catalog_commit_sha",
     "marketplace_blob_sha",
