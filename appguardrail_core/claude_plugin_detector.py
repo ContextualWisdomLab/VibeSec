@@ -2720,7 +2720,7 @@ def _checksum_listed_name_escapes(name: str) -> bool:
     ):
         return True
     parts = [part for part in raw.split("/") if part not in {"", "."}]
-    return any(part == ".." or part.startswith("..") for part in parts)
+    return any(part == ".." for part in parts)
 
 
 def _parse_gnu_checksum_line(line: str) -> tuple[str, str] | None:
@@ -2777,10 +2777,10 @@ def _resolve_checksum_target(
 ) -> Path | None:
     """Return the in-root regular file named by ``listed``, if any.
 
-    Resolution tries the checksum directory, the plugin root, then
-    ``.claude-plugin/<basename>`` so a root ``SHA256SUMS`` can name the
-    plugin artifact as ``plugin.json``. Symlinks and escaped paths yield
-    ``None``.
+    Resolution tries the checksum directory and plugin root. A root
+    ``SHA256SUMS`` may also name the plugin artifact as the bare
+    ``plugin.json`` basename. Nested paths never collapse to a basename.
+    Symlinks and escaped paths yield ``None``.
     """
     if _checksum_listed_name_escapes(listed):
         return None
@@ -2789,11 +2789,12 @@ def _resolve_checksum_target(
         root_resolved = root.resolve()
     except OSError:
         return None
-    candidates = (
+    candidates = [
         checksum_path.parent / raw,
         root / raw,
-        root / ".claude-plugin" / Path(raw).name,
-    )
+    ]
+    if checksum_path.parent == root and Path(raw).parent == Path("."):
+        candidates.append(root / ".claude-plugin" / Path(raw).name)
     for candidate in candidates:
         try:
             if candidate.is_symlink() or not candidate.is_file():
