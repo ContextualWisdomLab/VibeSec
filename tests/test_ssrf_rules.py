@@ -344,3 +344,21 @@ def _validated_try_except_source():
 def test_packaged_rule_ignores_try_except_guard():
     """Do not self-flag a try-except fail-closed rejection guard."""
     assert not _rule()["pattern"].search(_validated_try_except_source())
+
+def _validated_isinstance_source():
+    """Build a fail-closed guard wrapped in isinstance check."""
+    sink = "set_" + "webhook"
+    return "\n".join(
+        [
+            "def update_webhook(conn, org, body):",
+            '    webhook_url = body.get("url")',
+            "    if webhook_url is not None and (not isinstance(webhook_url, str) or not _is_safe_url(webhook_url)):",
+            '        return {"error": "unsafe webhook url"}',
+            f"    {sink}(conn, org, webhook_url)",
+            "",
+        ]
+    )
+
+def test_packaged_rule_ignores_isinstance_guard():
+    """Do not self-flag an isinstance fail-closed rejection guard."""
+    assert not _rule()["pattern"].search(_validated_isinstance_source())
