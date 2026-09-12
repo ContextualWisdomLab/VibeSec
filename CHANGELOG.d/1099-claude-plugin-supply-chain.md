@@ -42,5 +42,8 @@
   across the declared license field, LICENSE, and NOTICE fail as
   `claude-plugin-license-mismatch` without inventing legal approval.
   Hook `eval`/`exec`/`compile`/`Function` and shell `eval` fail as
-  `claude-plugin-dynamic-eval`. `.claude-plugin/` is included in the
-  scan walk.
+  `claude-plugin-dynamic-eval`. Hidden undeclared executable or config
+  surfaces (``.bin/run.sh``, ``.hooks/secret.py``) fail as
+  `claude-plugin-hidden-undeclared-executable`. `.git/` metadata,
+  `.gitignore`, LICENSE, declared `hooks/pre.sh`, and `.mcp.json` are
+  not that class. `.claude-plugin/` is included in the scan walk.

@@ -3,7 +3,8 @@
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
 unsigned executable download, package.json lifecycle download, unpinned
-package URL install, dynamic eval/exec, undeclared hook, archive path
+package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
+executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, secret copied into a network request, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
@@ -48,6 +49,12 @@ CLAUDE_PLUGIN_PIPE_TO_SHELL_MESSAGE: Final = (
 CLAUDE_PLUGIN_UNDECLARED_EXECUTABLE_MESSAGE: Final = (
     "Claude plugin package contains an executable surface that is not declared "
     "in the plugin manifest. Unknown hooks fail admission until classified. "
+    "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
+)
+CLAUDE_PLUGIN_HIDDEN_UNDECLARED_EXECUTABLE_MESSAGE: Final = (
+    "Claude plugin package contains a hidden executable or configuration "
+    "surface that is not declared in the plugin manifest. Dotfile names and "
+    "hidden directories fail admission until classified. "
     "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
 )
 CLAUDE_PLUGIN_SYMLINK_ESCAPE_MESSAGE: Final = (
@@ -212,6 +219,15 @@ _EXECUTABLE_SUFFIXES = frozenset(
 )
 _SHELL_SUFFIXES: Final = frozenset({".sh", ".bash", ".zsh"})
 _HOOK_DIRS = ("hooks", "scripts", "commands")
+_HIDDEN_CONFIG_SUFFIXES: Final = frozenset(
+    {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env"}
+)
+_GIT_METADATA_NAMES: Final = frozenset(
+    {".gitignore", ".gitattributes", ".gitmodules"}
+)
+_CLAUDE_PLUGIN_MANIFEST_NAMES: Final = frozenset(
+    {"plugin.json", "marketplace.json"}
+)
 _SKILL_SUPPLY_CHAIN_RULE_IDS: Final = frozenset(
     {
         "skill-name-homoglyph-confusable",
@@ -489,10 +505,12 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         root: Scan root that may contain ``.claude-plugin/``.
 
     Returns:
-        Undeclared executable, license absence or SPDX mismatch, size, symlink,
-        archive traversal, and unadmitted-submodule findings. Empty when the
-        tree is not a plugin package or every hook is a declared regular file.
-        Inventory presence is not a finding.
+        Undeclared executable, hidden undeclared executable or config,
+        license absence or SPDX mismatch, size, symlink, archive traversal,
+        and unadmitted-submodule findings. Empty when the tree is not a
+        plugin package or every hook is a declared regular file. Inventory
+        presence is not a finding. Git metadata is not a plugin executable
+        surface. ``.mcp.json`` stays the MCP class.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -567,6 +585,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                     file=relative,
                 )
             )
+    hits.extend(_hidden_undeclared_executable_hits(root, declared))
     return tuple(hits)
 
 
@@ -1274,6 +1293,87 @@ def _collect_declared(value: object, declared: set[str]) -> None:
     if isinstance(value, list):
         for item in value:
             _collect_declared(item, declared)
+
+
+def _is_git_metadata_path(relative: str) -> bool:
+    """Return whether ``relative`` is Git metadata, not a plugin surface.
+
+    ``.git/`` internals, gitlink files named ``.git``, and
+    ignore/attributes/modules files are VCS metadata. They are not Claude
+    plugin executable or config surfaces, including when nested under a
+    vendor path.
+    """
+    return any(
+        part == ".git" or part in _GIT_METADATA_NAMES for part in relative.split("/")
+    )
+
+
+def _is_hidden_plugin_path(relative: str) -> bool:
+    """Return whether a package-relative path uses a hidden name or directory."""
+    return any(part.startswith(".") for part in relative.split("/"))
+
+
+def _is_hidden_executable_or_config_surface(path: Path, relative: str) -> bool:
+    """Return whether a hidden path is an executable, script, or config surface.
+
+    Documented ``.mcp.json`` and ``.claude-plugin`` manifests are not this
+    class. Git metadata is not a plugin executable surface.
+    """
+    if not _is_hidden_plugin_path(relative) or _is_git_metadata_path(relative):
+        return False
+    if path.name in _MCP_FILENAMES:
+        return False
+    parts = relative.split("/")
+    if (
+        len(parts) >= 2
+        and parts[-2] == ".claude-plugin"
+        and parts[-1] in _CLAUDE_PLUGIN_MANIFEST_NAMES
+    ):
+        return False
+    suffix = path.suffix.lower()
+    return (
+        suffix in _EXECUTABLE_SUFFIXES
+        or suffix == ""
+        or suffix in _HIDDEN_CONFIG_SUFFIXES
+    )
+
+
+def _hidden_undeclared_executable_hits(
+    root: Path, declared: set[str]
+) -> tuple[PluginHit, ...]:
+    """Return findings for hidden undeclared executable or config surfaces.
+
+    Args:
+        root: Materialized plugin tree.
+        declared: Hook and command paths declared in the plugin manifest.
+
+    Returns:
+        Hits for hidden paths such as ``.bin/run.sh`` or ``.hooks/secret.py``
+        that are executable, script, or config surfaces and are not
+        declared. Empty when every hidden surface is Git metadata,
+        documented MCP or plugin manifest, or already declared. Non-hidden
+        extras under ``hooks/``, ``scripts/``, or ``commands/`` stay
+        ``claude-plugin-undeclared-executable``.
+    """
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in declared:
+            continue
+        if not _is_hidden_executable_or_config_surface(path, relative):
+            continue
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-hidden-undeclared-executable",
+                line=1,
+                snippet=_sanitize_path_snippet(path.name),
+                message=CLAUDE_PLUGIN_HIDDEN_UNDECLARED_EXECUTABLE_MESSAGE,
+                file=relative,
+            )
+        )
+    return tuple(hits)
 
 
 def _line_of(content: str, token: str) -> int:
