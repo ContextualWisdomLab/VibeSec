@@ -1,6 +1,6 @@
 """Tests for SARIF 2.1.0 output (appguardrail_core.sarif)."""
 
-from appguardrail_core.sarif import findings_to_sarif
+import appguardrail_core.sarif as sarif_module
 
 FINDINGS = [
     {
@@ -34,7 +34,7 @@ FINDINGS = [
 
 
 def test_sarif_shape_and_version():
-    log = findings_to_sarif(FINDINGS, tool_version="1.2.3")
+    log = sarif_module.findings_to_sarif(FINDINGS, tool_version="1.2.3")
     assert log["version"] == "2.1.0"
     assert log["$schema"].endswith("sarif-2.1.0.json")
     run = log["runs"][0]
@@ -44,7 +44,7 @@ def test_sarif_shape_and_version():
 
 
 def test_levels_and_security_severity():
-    run = findings_to_sarif(FINDINGS)["runs"][0]
+    run = sarif_module.findings_to_sarif(FINDINGS)["runs"][0]
     levels = [r["level"] for r in run["results"]]
     assert levels == ["error", "warning", "note"]
     # rules deduped by id (stripe rule appears once), plus the note rule
@@ -56,7 +56,7 @@ def test_levels_and_security_severity():
 
 
 def test_location_and_deploy_blocking():
-    run = findings_to_sarif(FINDINGS)["runs"][0]
+    run = sarif_module.findings_to_sarif(FINDINGS)["runs"][0]
     loc = run["results"][0]["locations"][0]["physicalLocation"]
     assert loc["artifactLocation"]["uri"] == "src/pay.ts"
     assert loc["region"]["startLine"] == 12
@@ -69,6 +69,39 @@ def test_location_and_deploy_blocking():
 
 
 def test_empty_findings_valid():
-    run = findings_to_sarif([])["runs"][0]
+    run = sarif_module.findings_to_sarif([])["runs"][0]
     assert run["results"] == []
     assert run["tool"]["driver"]["rules"] == []
+
+
+def test_rule_index_lookup_does_not_scan_prior_rules(monkeypatch):
+    class CountingRuleId(str):
+        comparisons = 0
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            type(self).comparisons += 1
+            return super().__eq__(other)
+
+    normalized = tuple(
+        {
+            "severity": "INFO",
+            "rule_id": CountingRuleId(f"rule-{index}"),
+            "message": "finding",
+            "file": f"src/{index}.py",
+            "line": 1,
+            "category": "misconfig",
+            "context": "test",
+            "references": (),
+            "cwe": (),
+            "owasp": (),
+            "remediation": "",
+        }
+        for index in range(200)
+    )
+    monkeypatch.setattr(sarif_module, "normalize_findings", lambda _findings: normalized)
+
+    run = sarif_module.findings_to_sarif(())["runs"][0]
+
+    assert [result["ruleIndex"] for result in run["results"]] == list(range(200))
+    assert CountingRuleId.comparisons < 1_000
