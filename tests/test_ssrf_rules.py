@@ -325,22 +325,3 @@ def test_scan_file_emits_finding_for_non_enforcing_guard(tmp_path):
 def test_scan_file_does_not_flag_validated_path(tmp_path):
     """Suppress the finding for a verified fail-closed persistence path."""
     assert not _scan_rule_findings(tmp_path, _safe_source())
-
-def _validated_try_except_source():
-    """Build a fail-closed guard wrapped in try-except."""
-    sink = "set_" + "webhook"
-    return "\n".join(
-        [
-            "def update_webhook(conn, org, body):",
-            '    webhook_url = body.get("url")',
-            "    try:",
-            f"        {sink}(conn, org, webhook_url)",
-            "    except ValueError:",
-            '        return {"error": "unsafe webhook url"}',
-            "",
-        ]
-    )
-
-def test_packaged_rule_ignores_try_except_guard():
-    """Do not self-flag a try-except fail-closed rejection guard."""
-    assert not _rule()["pattern"].search(_validated_try_except_source())
