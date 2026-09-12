@@ -263,9 +263,12 @@ _NAMED_SECRET_NAMES: Final = (
 )
 _NAMED_SECRET_TOKEN = re.compile(_NAMED_SECRET_NAMES, re.IGNORECASE)
 _SECRET_REF = re.compile(
-    r"(?:\$(?:\{)?"
+    r"(?:\$(?:"
     + _NAMED_SECRET_NAMES
-    + r"(?:\})?|"
+    + r")(?![A-Za-z0-9_])|"
+    r"\$\{(?:"
+    + _NAMED_SECRET_NAMES
+    + r")(?:\:-[^}]*)?\}|"
     r"os\.environ\s*\[\s*['\"](?:"
     + _NAMED_SECRET_NAMES
     + r")['\"]\s*\]|"
