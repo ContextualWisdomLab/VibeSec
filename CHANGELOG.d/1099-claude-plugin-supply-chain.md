@@ -18,7 +18,9 @@
   not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
   admission as policy findings; `gh issue create` and `docker push` stay
-  inventory evidence. Unsigned `curl`/`wget` executable fetches and
+  inventory evidence. Secret references require a complete environment-variable
+  name, so longer documentation variables do not collide with protected names.
+  Unsigned `curl`/`wget` executable fetches and
   unpinned pip/npm/cargo URL installs fail admission; a `package.json`
   plus lockfile without a postinstall download stays `package_install`
   inventory. Plugin skill/agent surfaces reuse released #1036 rule
