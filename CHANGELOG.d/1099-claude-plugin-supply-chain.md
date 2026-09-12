@@ -15,4 +15,9 @@
   AppGuardrail policy, not activation. Retained receipts fail closed on a
   wrong artifact digest, wrong scanner policy digest, stale catalog, source,
   or marketplace identity, or replay against mutated bytes; verification is
-  not Noema admission. `.claude-plugin/` is included in the scan walk.
+  not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
+  socket binds, and named secrets copied into curl/wget/fetch fail
+  admission as policy findings; `gh issue create` and `docker push` stay
+  inventory evidence. Secret references require a complete environment-variable
+  name, so longer documentation variables do not collide with protected names.
+  `.claude-plugin/` is included in the scan walk.

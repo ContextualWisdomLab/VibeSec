@@ -16,7 +16,7 @@ every frozen family. It implements only the unique families it owns.
 |---|---|---|---|---|
 | Transport-only Actions polling | SAST | #1087, #938 | PR #1088 / issue #1087 | maps only |
 | Secret indirection / auth comments | SAST | #1106 | this successor | implements regression lock on existing `_scan_file` rules, including LifeOS #247 test-title/authority wording |
-| Claude plugin supply chain | SAST | #1099 | this successor | implements `claude-plugin-*` findings, capability inventory evidence, undeclared-executable admission, a secret-free scan receipt, and fail-closed stale/mismatched receipt verification |
+| Claude plugin supply chain | SAST | #1099 | this successor | implements `claude-plugin-*` findings including GitHub write tokens, Docker socket binds, and secret-to-network flows, capability inventory evidence, undeclared-executable admission, a secret-free scan receipt, and fail-closed stale/mismatched receipt verification |
 | Orphaned Actions workflows | DAST | #929 | PR #966 / issue #929 | maps only |
 | Org CI failure without evidence | non-detectable | 353 tickets | inventory snapshot | maps only |
 | UX / control-plane product gaps | non-detectable | #871, #928 | out of SAST/DAST scope | maps only |
