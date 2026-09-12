@@ -73,7 +73,8 @@ jobs:
             --test tests/test_claude_plugin_insecure_file_mode.py \
             --test tests/test_claude_plugin_decompression_bomb.py \
             --test tests/test_claude_plugin_archive_aggregate_admission.py \
-            --test tests/test_claude_plugin_policy_provenance.py
+            --test tests/test_claude_plugin_policy_provenance.py \
+            --test tests/test_claude_plugin_sbom_receipt.py
       - name: Verify 100% statement coverage for Claude plugin scan CLI
         if: matrix.python-version == '3.13'
         run: |
