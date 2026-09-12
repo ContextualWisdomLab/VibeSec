@@ -35,4 +35,6 @@
   binds `catalog_repository`, `catalog_commit_sha`, and
   `marketplace_blob_sha`; a floating catalog commit or a catalog plugin
   identity that disagrees with the retrieved artifact fails closed.
+  Receipt `sarif_sha256` is the SHA-256 of a deterministic SARIF 2.1.0
+  document covering the same finding rule_ids as `finding_summary`.
   `.claude-plugin/` is included in the scan walk.

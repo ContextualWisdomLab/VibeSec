@@ -24,6 +24,7 @@ import tarfile
 from typing import Final, Iterable
 import zipfile
 
+from .claude_plugin_sarif import finding_summary_to_sarif, sarif_document_sha256
 
 CLAUDE_PLUGIN_FLOATING_REF_MESSAGE: Final = (
     "Claude plugin source uses a floating branch or tag instead of an immutable "
@@ -603,15 +604,8 @@ def build_claude_plugin_scan_receipt(
     policy_sha256 = _sha256(Path(__file__).read_bytes())
     inventory = inventory_claude_plugin_capabilities(root)
     capability_inventory_sha256 = _capability_inventory_digest(inventory)
-    sarif_sha256 = _sha256(
-        json.dumps(
-            [
-                {"rule_id": hit.rule_id, "line": hit.line, "file": hit.file or ""}
-                for hit in hits
-            ],
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
+    sarif_sha256 = sarif_document_sha256(
+        finding_summary_to_sarif(finding_summary, tool_version=scanner_version)
     )
     is_package = (root / ".claude-plugin").is_dir() and not (
         root / ".claude-plugin"
