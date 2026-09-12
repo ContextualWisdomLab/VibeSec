@@ -19,8 +19,11 @@ skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission: presence of a capability is not a finding by itself. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
-identities. A lockfile-backed package.json without a lifecycle download
-stays inventory. Vendored trees are one scope finding, not hook scans.
+identities. Skill, command, or agent text that hides tool use, rewrites
+the system prompt, or escalates the declared goal is a separate
+instruction-override family. A lockfile-backed package.json without a
+lifecycle download stays inventory. Vendored trees are one scope finding,
+not hook scans.
 """
 
 from __future__ import annotations
@@ -195,6 +198,24 @@ CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE: Final = (
     "command, URL, or header. Keep credentials out of MCP declarations. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
+CLAUDE_PLUGIN_HIDE_ACTIONS_MESSAGE: Final = (
+    "Claude plugin skill, command, or agent text instructs the model to hide "
+    "tool use or conceal actions from the user. Instruction text is untrusted "
+    "data. Remove the directive. "
+    "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
+)
+CLAUDE_PLUGIN_SELF_MODIFY_MESSAGE: Final = (
+    "Claude plugin skill, command, or agent text instructs the model to "
+    "rewrite its system prompt or ignore previous policy. Instruction text "
+    "is untrusted data. Remove the directive. "
+    "[CWE-693 - Protection Mechanism Failure]"
+)
+CLAUDE_PLUGIN_GOAL_ESCALATION_MESSAGE: Final = (
+    "Claude plugin skill, command, or agent text instructs the model to "
+    "expand or escalate the goal beyond the declared task. Instruction text "
+    "is untrusted data. Remove the directive. "
+    "[CWE-693 - Protection Mechanism Failure]"
+)
 CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE: Final = (
     "Claude plugin hook or package lifecycle script downloads an unsigned "
     "executable and makes it runnable. Pin and verify binaries; do not "
@@ -349,6 +370,33 @@ _SKILL_SUPPLY_CHAIN_RULE_IDS: Final = frozenset(
 )
 _SKILL_SURFACE_NAMES: Final = frozenset({"SKILL.md", "skill.json", "agent.md"})
 _SKILL_MARKDOWN_DIRS: Final = frozenset({"commands", "agents"})
+_HIDE_ACTIONS_DIRECTIVE = re.compile(
+    r"(?i)(?:do not tell the user[^\n]{0,80}(?:calling tools|tool calls|"
+    r"tool use)|hide (?:your )?(?:actions|tool use|tool calls))"
+)
+_SELF_MODIFY_DIRECTIVE = re.compile(
+    r"(?i)(?:ignore previous policy|rewrite (?:your )?system prompt)"
+)
+_GOAL_ESCALATION_DIRECTIVE = re.compile(
+    r"(?i)(?:expand|escalate|broaden) (?:the |your )?(?:goal|scope|objective)"
+)
+_INSTRUCTION_OVERRIDE_RULES: Final = (
+    (
+        "claude-plugin-hide-actions-directive",
+        _HIDE_ACTIONS_DIRECTIVE,
+        CLAUDE_PLUGIN_HIDE_ACTIONS_MESSAGE,
+    ),
+    (
+        "claude-plugin-self-modify-directive",
+        _SELF_MODIFY_DIRECTIVE,
+        CLAUDE_PLUGIN_SELF_MODIFY_MESSAGE,
+    ),
+    (
+        "claude-plugin-goal-escalation-directive",
+        _GOAL_ESCALATION_DIRECTIVE,
+        CLAUDE_PLUGIN_GOAL_ESCALATION_MESSAGE,
+    ),
+)
 _DESCRIPTION_JSON_NAMES: Final = frozenset(
     {"plugin.json", "marketplace.json", "skill.json"}
 )
@@ -2781,6 +2829,7 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
             )
     hits.extend(_package_lifecycle_file_hits(root))
     hits.extend(_skill_supply_chain_hits(root))
+    hits.extend(_instruction_override_hits(root))
     return tuple(hits)
 
 
@@ -2804,6 +2853,65 @@ def _is_skill_surface(path: Path) -> bool:
     if not name.lower().endswith(".md"):
         return False
     return any(part.lower() in _SKILL_MARKDOWN_DIRS for part in path.parts[:-1])
+
+
+def _instruction_override_content_hits(
+    content: str, relative: str
+) -> tuple[PluginHit, ...]:
+    """Return hide-actions, self-modify, and goal-escalation hits from one file.
+
+    The three rule identities are one instruction-to-the-model family. This
+    detector does not copy #1036 injection or exfil regular expressions.
+
+    Args:
+        content: Skill, command, or agent instruction text.
+        relative: Repository-relative display path.
+
+    Returns:
+        Zero or more hits. Snippets omit secret literals and raw bidi.
+    """
+    hits: list[PluginHit] = []
+    for rule_id, pattern, message in _INSTRUCTION_OVERRIDE_RULES:
+        match = pattern.search(content)
+        if match is None:
+            continue
+        hits.append(
+            PluginHit(
+                rule_id=rule_id,
+                line=content[: match.start()].count("\n") + 1,
+                snippet=_sanitize_plugin_snippet(match.group(0).splitlines()[0]),
+                message=message,
+                file=relative,
+            )
+        )
+    return tuple(hits)
+
+
+def _instruction_override_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Fail closed on skill, command, or agent text that overrides the task.
+
+    Hide-actions, self-modify, and goal-escalation wording share this walker.
+    README, root ``AGENTS.md``, vendored copies, and command shell files are
+    not this class. #1036 injection and exfil identities stay on their rules.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Hits whose ``rule_id`` values are the instruction-override family.
+        Empty when no skill, command, or agent surface carries that wording.
+    """
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file() or not _is_skill_surface(path):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if _is_vendored_scope_relative(relative):
+            continue
+        payload = _regular_file_bytes(path)
+        content = payload.decode("utf-8", errors="replace")
+        hits.extend(_instruction_override_content_hits(content, relative))
+    return tuple(hits)
 
 
 def _skill_supply_chain_hits(root: Path) -> tuple[PluginHit, ...]:
