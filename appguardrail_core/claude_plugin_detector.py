@@ -1570,8 +1570,9 @@ def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
-    if "/commands/" in posix:
-        name = _nfc_identity_name(path.stem)
+    if relative.startswith("commands/") and path.suffix.lower() == ".md":
+        command_path = relative[len("commands/") : -len(path.suffix)]
+        name = _nfc_identity_name(command_path.replace("/", ":"))
         return ("skill", name) if name is not None else None
     if path.name == "skill.json":
         try:
