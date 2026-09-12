@@ -215,6 +215,7 @@ def _iter_lower_path_components(path: str) -> Iterable[str]:
 
 
 def _detect_framework_markers(paths: list[str]) -> set[str]:
+    """Return framework markers inferred from path components and manifests."""
     markers: set[str] = set()
     for path in paths:
         idx = max(path.rfind("/"), path.rfind("\\"))
