@@ -3,10 +3,11 @@
 Findings come from parsed manifests and executable surfaces, not from issue
 titles. A floating Git ref, provider secret, pipe-to-shell installer,
 unsigned executable download, package.json lifecycle download, unpinned
-package URL install, undeclared hook, archive path escape, unadmitted nested
-submodule, hardcoded GitHub write token, Docker socket bind, secret copied
-into a network request, or a released skill-supply-chain finding on a plugin
-skill/agent surface is a policy finding. Capability inventory is evidence,
+package URL install, dynamic eval/exec, undeclared hook, archive path
+escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
+socket bind, secret copied into a network request, or a released
+skill-supply-chain finding on a plugin skill/agent surface is a policy
+finding. Capability inventory is evidence,
 not permission: presence of a capability is not a finding by itself. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. A lockfile-backed package.json without a lifecycle download
@@ -73,6 +74,16 @@ CLAUDE_PLUGIN_LICENSE_MISMATCH_MESSAGE: Final = (
     "Claude plugin license evidence names more than one SPDX identifier. "
     "Record the conflict without inventing legal approval. "
     "[CWE-1104 - Use of Unmaintained Third Party Components]"
+)
+CLAUDE_PLUGIN_DYNAMIC_EVAL_MESSAGE: Final = (
+    "Claude plugin hook evaluates a string as code. Dynamic eval, exec, "
+    "compile, or Function constructors fail admission. "
+    "[CWE-95 - Improper Neutralization of Directives in Dynamically Evaluated Code]"
+)
+_DYNAMIC_EVAL = re.compile(
+    r"\b(?:eval|exec|compile)\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(|"
+    r"(?:^|[\s;&|])eval\s+[\"'$]",
+    re.IGNORECASE | re.MULTILINE,
 )
 _SPDX_TOKEN = re.compile(
     r"\b(Apache-2\.0|MIT|BSD-2-Clause|BSD-3-Clause|GPL-3\.0-only|"
@@ -461,6 +472,7 @@ def inspect_claude_plugin_file(
     if hook_surface:
         hits.extend(_unsigned_executable_download_hits(content))
         hits.extend(_unpinned_package_install_hits(content))
+        hits.extend(_dynamic_eval_hits(content))
     if lifecycle_surface:
         hits.extend(_package_lifecycle_hits(content))
     if manifest or hook_surface:
@@ -969,6 +981,26 @@ def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=prefix,
             message=CLAUDE_PLUGIN_GITHUB_WRITE_TOKEN_MESSAGE,
+        ),
+    )
+
+
+def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return findings for eval/exec/compile/Function on hook surfaces."""
+    match = _DYNAMIC_EVAL.search(content)
+    if match is None:
+        return ()
+    token = match.group(0).strip()
+    if "(" in token:
+        label = token.split("(", 1)[0].strip()[:40]
+    else:
+        label = token.split()[0][:40]
+    return (
+        PluginHit(
+            rule_id="claude-plugin-dynamic-eval",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=label,
+            message=CLAUDE_PLUGIN_DYNAMIC_EVAL_MESSAGE,
         ),
     )
 
