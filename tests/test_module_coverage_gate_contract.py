@@ -136,6 +136,7 @@ def test_tests_workflow_enforces_exact_100_percent_for_new_modules() -> None:
     assert "appguardrail_core/code_scanning.py" in workflow
     assert "scripts/ci/collect_code_scanning_drift.py" in workflow
     assert "appguardrail_core/claude_plugin_detector.py" in workflow
+    assert "appguardrail_core/claude_plugin_scan_cli.py" in workflow
     assert "appguardrail_core/github_actions_poll_loop.py" not in workflow
     assert "appguardrail_core/github_workflow_orphans.py" not in workflow
     assert "100% statement coverage" in workflow

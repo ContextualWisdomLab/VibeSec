@@ -54,3 +54,9 @@ jobs:
           python -m scripts.ci.verify_module_coverage \
             --module appguardrail_core/claude_plugin_detector.py \
             --test tests/test_claude_plugin_supply_chain.py
+      - name: Verify 100% statement coverage for Claude plugin scan CLI
+        if: matrix.python-version == '3.13'
+        run: |
+          python -m scripts.ci.verify_module_coverage \
+            --module appguardrail_core/claude_plugin_scan_cli.py \
+            --test tests/test_claude_plugin_scan_cli.py
