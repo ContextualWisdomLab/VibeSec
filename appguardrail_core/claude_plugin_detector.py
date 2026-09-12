@@ -1570,6 +1570,9 @@ def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    if "/commands/" in posix:
+        name = _nfc_identity_name(path.stem)
+        return ("skill", name) if name is not None else None
     if path.name == "skill.json":
         try:
             payload = json.loads(content)
@@ -1587,8 +1590,6 @@ def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
         name = _nfc_identity_name(text)
         if name is None:
             return None
-        if "/commands/" in posix:
-            return "command", name
         if "/agents/" in posix:
             return "agent", name
         return "skill", name
