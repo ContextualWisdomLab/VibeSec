@@ -21,9 +21,10 @@
   inventory evidence. Secret references require a complete environment-variable
   name, so longer documentation variables do not collide with protected names.
   Unsigned `curl`/`wget` executable fetches and
-  unpinned pip/npm/cargo URL installs fail admission; a `package.json`
-  plus lockfile without a postinstall download stays `package_install`
-  inventory. Plugin skill/agent surfaces reuse released #1036 rule
+  unpinned pip/npm/cargo URL installs fail admission; `package.json`
+  `preinstall`/`install`/`postinstall` scripts that download or execute
+  an unsigned payload fail closed on the same rules, while a lockfile-only
+  tree without those downloads stays `package_install` inventory. Plugin skill/agent surfaces reuse released #1036 rule
   identities (`skill-name-homoglyph-confusable`,
   `skill-manifest-prompt-injection-payload`,
   `skill-doc-exfiltration-endpoint-directive`,
