@@ -22,14 +22,17 @@ finding. Capability inventory is evidence,
 not permission, except that hook or manifest ``gh pr merge`` and
 ``gh release create|upload|delete|edit`` fail closed as command findings.
 Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
-deployment-write command findings. Hook or manifest paths into
+deployment-write command findings. Hook or manifest ``terraform apply``
+and ``helm install`` fail closed as infra-write command findings.
+``terraform plan``, ``helm list``, ``vercel deploy``, and ``fly deploy``
+stay inventory. Hook or manifest paths into
 ``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 ``~/.ssh/id_*`` private keys fail closed as credential-store findings.
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
 ``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
-``terraform apply``, and ``helm install`` stay inventory. Skill
+``terraform plan``, and ``helm list`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -234,6 +237,16 @@ CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE: Final = (
     "write authority on a registry. Remove the command. "
     "[CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs terraform apply. Applying "
+    "infrastructure is write authority. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs helm install. Installing a chart "
+    "is write authority on a cluster. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -359,6 +372,12 @@ _KUBECTL_APPLY_COMMAND = re.compile(
 _DOCKER_PUSH_COMMAND = re.compile(
     r"\bdocker(?:\s+image)?\s+push(?=$|[\s;&|()<>])",
     re.IGNORECASE,
+)
+_TERRAFORM_APPLY_COMMAND = re.compile(
+    r"\bterraform\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
+_HELM_INSTALL_COMMAND = re.compile(
+    r"\bhelm\s+install(?=$|[\s;&|()<>])", re.IGNORECASE
 )
 _REPORTING_BUILTINS: Final = frozenset(
     {":", "echo", "false", "print", "printf", "true"}
@@ -876,6 +895,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_release_command_hits(content, manifest=manifest))
         hits.extend(_kubectl_apply_command_hits(content, manifest=manifest))
         hits.extend(_docker_push_command_hits(content, manifest=manifest))
+        hits.extend(_terraform_apply_command_hits(content, manifest=manifest))
+        hits.extend(_helm_install_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1599,6 +1620,93 @@ def _github_release_command_hits(
             )
     return ()
 
+def _kubectl_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable kubectl apply findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        line = _manifest_argv_command_line(
+            content, executable="kubectl", verb="apply"
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=line,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
+def _docker_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable Docker push findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            if _direct_executable_basename(command) != "docker":
+                continue
+            folded = tuple(argument.casefold() for argument in args)
+            if folded[:1] == ("push",) or folded[:2] == ("image", "push"):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-docker-push-command",
+                        line=line,
+                        snippet="docker push",
+                        message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
 def _unquoted_hash_index(line: str) -> int | None:
     """Return the index of an unquoted ``#`` shell comment, if any.
 
@@ -2085,92 +2193,96 @@ def _nested_shell_payload_sources(
     return tuple(found)
 
 
-def _kubectl_apply_command_hits(
+def _terraform_apply_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return executable kubectl apply findings, including typed argv."""
+    """Return executable terraform apply findings without vars."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
-        if match is not None:
-            return (
-                PluginHit(
-                    rule_id="claude-plugin-kubectl-apply-command",
-                    line=first_line + source[: match.start()].count("\n"),
-                    snippet="kubectl apply",
-                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
-                ),
-            )
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-terraform-apply-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="terraform apply",
+                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+            ),
+        )
     if manifest:
         line = _manifest_argv_command_line(
-            content, executable="kubectl", verb="apply"
+            content,
+            executable="terraform",
+            verb="apply",
+            leading_value_option="-chdir=",
         )
         if line is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-kubectl-apply-command",
+                    rule_id="claude-plugin-terraform-apply-command",
                     line=line,
-                    snippet="kubectl apply",
-                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                    snippet="terraform apply",
+                    message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
                 ),
             )
     for source, first_line in _nested_shell_payload_sources(
         content, manifest=manifest
     ):
-        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
         if match is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-kubectl-apply-command",
+                    rule_id="claude-plugin-terraform-apply-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet="kubectl apply",
-                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                    snippet="terraform apply",
+                    message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
                 ),
             )
     return ()
 
-def _docker_push_command_hits(
+
+def _helm_install_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return executable Docker push findings, including typed argv."""
+    """Return executable helm install findings without chart names."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
-        if match is not None:
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-helm-install-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="helm install",
+                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+            ),
+        )
+    if manifest:
+        line = _manifest_argv_command_line(content, executable="helm", verb="install")
+        if line is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-docker-push-command",
-                    line=first_line + source[: match.start()].count("\n"),
-                    snippet="docker push",
-                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                    rule_id="claude-plugin-helm-install-command",
+                    line=line,
+                    snippet="helm install",
+                    message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
                 ),
             )
-    if manifest:
-        for command, args, line in _manifest_argv_sources(content):
-            if _direct_executable_basename(command) != "docker":
-                continue
-            folded = tuple(argument.casefold() for argument in args)
-            if folded[:1] == ("push",) or folded[:2] == ("image", "push"):
-                return (
-                    PluginHit(
-                        rule_id="claude-plugin-docker-push-command",
-                        line=line,
-                        snippet="docker push",
-                        message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
-                    ),
-                )
     for source, first_line in _nested_shell_payload_sources(
         content, manifest=manifest
     ):
-        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
         if match is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-docker-push-command",
+                    rule_id="claude-plugin-helm-install-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet="docker push",
-                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                    snippet="helm install",
+                    message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
                 ),
             )
     return ()
+
 
 def _dynamic_eval_hits(content: str) -> tuple[PluginHit, ...]:
     """Return findings for eval/exec/compile/Function on hook surfaces."""

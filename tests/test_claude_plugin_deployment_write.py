@@ -115,8 +115,8 @@ def test_kubectl_get_and_docker_ps_stay_inventory(tmp_path: Path) -> None:
     assert inventory["deployment_write"] is False
 
 
-def test_terraform_and_helm_stay_inventory(tmp_path: Path) -> None:
-    """Terraform apply and Helm install stay inventory; this slice does not own them."""
+def test_terraform_and_helm_are_not_kubectl_or_docker_push(tmp_path: Path) -> None:
+    """Terraform apply and Helm install are not the kubectl/docker-push class."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nterraform apply -auto-approve\nhelm install app chart/\n",
@@ -125,7 +125,6 @@ def test_terraform_and_helm_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 
