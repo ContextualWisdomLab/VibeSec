@@ -1599,8 +1599,15 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
         env = server.get("env")
         if isinstance(env, dict):
             for key, value in env.items():
-                blob = f"{key} {value}" if isinstance(value, str) else str(key)
-                match = _NAMED_SECRET_TOKEN.search(blob)
+                match = (
+                    _NAMED_SECRET_TOKEN.fullmatch(key)
+                    if isinstance(key, str)
+                    else None
+                )
+                if match is None and isinstance(value, str):
+                    reference = _SECRET_REF.search(value)
+                    if reference is not None:
+                        match = _NAMED_SECRET_TOKEN.search(reference.group(0))
                 if match is not None:
                     token = match.group(0)
                     return (
@@ -1616,7 +1623,12 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
             for arg in args:
                 if not isinstance(arg, str):
                     continue
-                match = _NAMED_SECRET_TOKEN.search(arg)
+                reference = _SECRET_REF.search(arg)
+                match = (
+                    _NAMED_SECRET_TOKEN.search(reference.group(0))
+                    if reference is not None
+                    else None
+                )
                 if match is not None:
                     token = match.group(0)
                     return (
@@ -1629,7 +1641,12 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                     )
         command = server.get("command")
         if isinstance(command, str):
-            match = _NAMED_SECRET_TOKEN.search(command)
+            reference = _SECRET_REF.search(command)
+            match = (
+                _NAMED_SECRET_TOKEN.search(reference.group(0))
+                if reference is not None
+                else None
+            )
             if match is not None:
                 token = match.group(0)
                 return (
