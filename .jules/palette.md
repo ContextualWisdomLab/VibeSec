@@ -81,3 +81,7 @@
 ## 2026-08-12 - Skip to Content Accessibility
 **Learning:** Screen reader and keyboard-only users experience significant friction when forced to navigate through repetitive header controls on every page load.
 **Action:** Keep a visible-on-focus skip link as the first interactive element, target a programmatically focusable main container, and give the focused link a high-contrast outline.
+
+## 2024-05-24 - Semantics for disabled interactive elements
+**Learning:** Relying solely on `aria-busy` to convey a non-interactive state is insufficient. Screen readers interpret `aria-busy` as work in progress, not that the element is unavailable for interaction.
+**Action:** Always apply `aria-disabled="true"` alongside explicit JavaScript event guards when disabling non-native interactive elements (like `<tr role="button">`) to properly communicate the state to assistive technologies.
