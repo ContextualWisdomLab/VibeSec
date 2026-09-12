@@ -7,7 +7,8 @@ package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
-request, or a released
+request, a description that denies inventoried write, network, GitHub
+write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission: presence of a capability is not a finding by itself. Skill
@@ -141,6 +142,14 @@ CLAUDE_PLUGIN_BROWSER_PROFILE_MESSAGE: Final = (
     "browser. Remove the profile path. "
     "[CWE-219 - Sensitive Information in Browser's History/Cache/Cookies]"
 )
+CLAUDE_PLUGIN_DECEPTIVE_DESCRIPTION_MESSAGE: Final = (
+    "Claude plugin, skill, or command description claims innocuous, "
+    "read-only, or local-only behavior while the capability inventory "
+    "shows write, network, GitHub write, credential, remote MCP, or "
+    "shell access that the description denies. Inventory is evidence, "
+    "not permission; the description must not contradict it. "
+    "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
+)
 CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
     "Claude plugin hook copies a named secret into a network request. Keep "
     "credentials out of curl, wget, and fetch payloads. "
@@ -251,6 +260,35 @@ _SKILL_SUPPLY_CHAIN_RULE_IDS: Final = frozenset(
     }
 )
 _SKILL_SURFACE_NAMES: Final = frozenset({"SKILL.md", "skill.json", "agent.md"})
+_DESCRIPTION_JSON_NAMES: Final = frozenset(
+    {"plugin.json", "marketplace.json", "skill.json"}
+)
+_DESCRIPTION_MARKDOWN_DIRS: Final = ("/skills/", "/commands/")
+_FRONTMATTER = re.compile(
+    r"\A---\r?\n(?P<body>.*?)\r?\n---(?:\r?\n|\Z)",
+    re.DOTALL,
+)
+_READ_ONLY_CLAIM = re.compile(
+    r"read[\s-]*only|never writes|does not write|no writes?\b|without writing",
+    re.IGNORECASE,
+)
+_LOCAL_ONLY_CLAIM = re.compile(
+    r"local[\s-]*only|\blocal helper\b|\boffline\b|no network|"
+    r"never sends|does not send|without network|air[\s-]*gapped|"
+    r"no internet|does not access the network",
+    re.IGNORECASE,
+)
+_INNOCUOUS_CLAIM = re.compile(r"\binnocuous\b|\bharmless\b", re.IGNORECASE)
+_NO_CREDENTIAL_CLAIM = re.compile(
+    r"no credentials?|never (?:reads|accesses) credentials?|"
+    r"does not access credentials?|without credentials?|no secrets?",
+    re.IGNORECASE,
+)
+_NO_SHELL_CLAIM = re.compile(
+    r"no shell|never executes|does not execute|without executing|"
+    r"no command execution",
+    re.IGNORECASE,
+)
 _INVENTORY_MANIFESTS: Final = frozenset(
     {"plugin.json", "marketplace.json", ".mcp.json", "mcp.json", "hooks.json"}
 )
@@ -522,10 +560,11 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     Returns:
         Undeclared executable, hidden undeclared executable or config,
         license absence or SPDX mismatch, size, symlink, archive traversal,
-        and unadmitted-submodule findings. Empty when the tree is not a
-        plugin package or every hook is a declared regular file. Inventory
-        presence is not a finding. Git metadata is not a plugin executable
-        surface. ``.mcp.json`` stays the MCP class.
+        unadmitted-submodule, and deceptive description findings. Empty
+        when the tree is not a plugin package or every hook is a declared
+        regular file. Inventory presence is not a finding. An empty
+        description is not this class. Git metadata is not a plugin
+        executable surface. ``.mcp.json`` stays the MCP class.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -601,6 +640,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 )
             )
     hits.extend(_hidden_undeclared_executable_hits(root, declared))
+    hits.extend(_deceptive_description_hits(root))
     return tuple(hits)
 
 
@@ -1414,6 +1454,166 @@ def _hidden_undeclared_executable_hits(
             )
         )
     return tuple(hits)
+
+
+def _deceptive_description_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return findings when a description denies inventoried capabilities.
+
+    Plugin, skill, and command description fields are compared with the
+    package capability inventory. Inventory is evidence, not permission:
+    a true capability is not this finding unless the description denies
+    it. Empty or missing descriptions are not this class.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Zero or more hits bound to the description source file. Snippets
+        omit secret literals and raw bidi.
+    """
+    inventory = inventory_claude_plugin_capabilities(root)
+    hits: list[PluginHit] = []
+    for relative, line, text in _iter_plugin_descriptions(root):
+        denied = _denied_capabilities(text)
+        if not any(inventory.get(key) for key in denied):
+            continue
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-deceptive-description",
+                line=line,
+                snippet=_sanitize_plugin_snippet(text),
+                message=CLAUDE_PLUGIN_DECEPTIVE_DESCRIPTION_MESSAGE,
+                file=relative,
+            )
+        )
+    return tuple(hits)
+
+
+def _iter_plugin_descriptions(root: Path) -> tuple[tuple[str, int, str], ...]:
+    """Yield ``(relative path, line, description)`` from plugin surfaces."""
+    found: list[tuple[str, int, str]] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _is_json_description_surface(path.name, relative):
+            found.extend(_json_descriptions(content, relative))
+        elif _is_markdown_description_surface(path.name, relative):
+            text, line = _markdown_description(content)
+            if text.strip():
+                found.append((relative, line, text))
+    return tuple(found)
+
+
+def _is_json_description_surface(name: str, relative: str) -> bool:
+    """Return whether ``relative`` is a JSON plugin, marketplace, or skill file."""
+    posix = relative.replace("\\", "/")
+    if name in _DESCRIPTION_JSON_NAMES and posix.startswith(".claude-plugin/"):
+        return True
+    return name == "skill.json"
+
+
+def _is_markdown_description_surface(name: str, relative: str) -> bool:
+    """Return whether ``relative`` is a skill or command markdown surface."""
+    if not name.lower().endswith(".md"):
+        return False
+    posix = f"/{relative.replace(chr(92), '/')}/"
+    return any(marker in posix for marker in _DESCRIPTION_MARKDOWN_DIRS)
+
+
+def _json_descriptions(content: str, relative: str) -> tuple[tuple[str, int, str], ...]:
+    """Return description strings from one JSON plugin or skill document."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return ()
+    found: list[tuple[str, int, str]] = []
+    for text in _iter_description_strings(payload):
+        if not text.strip():
+            continue
+        found.append((relative, _line_of(content, text), text))
+    return tuple(found)
+
+
+def _iter_description_strings(payload: object) -> Iterable[str]:
+    """Yield ``description`` string fields from plugin JSON objects."""
+    if isinstance(payload, dict):
+        value = payload.get("description")
+        if isinstance(value, str):
+            yield value
+        for nested in payload.values():
+            yield from _iter_description_strings(nested)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _iter_description_strings(item)
+
+
+def _markdown_description(content: str) -> tuple[str, int]:
+    """Return the YAML frontmatter description and its 1-based line.
+
+    Inline ``description:`` values are collected. Block scalars and missing
+    frontmatter yield an empty description rather than inventing a
+    missing-description finding.
+
+    Args:
+        content: Markdown file text.
+
+    Returns:
+        Description text and line number. ``("", 0)`` when none exists.
+    """
+    match = _FRONTMATTER.match(content)
+    if match is None:
+        return "", 0
+    body = match.group("body")
+    start_line = content[: match.start("body")].count("\n") + 1
+    for offset, line in enumerate(body.splitlines()):
+        if not line.lower().startswith("description:"):
+            continue
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if value in {"|", ">", "|-", "|+", ">-", ">+"}:
+            return "", start_line + offset
+        return value, start_line + offset
+    return "", 0
+
+
+def _denied_capabilities(description: str) -> frozenset[str]:
+    """Return capabilities a description claims not to use.
+
+    Args:
+        description: Plugin, skill, or command description text.
+
+    Returns:
+        Subset of write, network, GitHub write, credential, remote MCP,
+        and shell keys the text denies. Empty when the text makes no
+        such claim.
+    """
+    text = description.strip()
+    denied: set[str] = set()
+    if _READ_ONLY_CLAIM.search(text):
+        denied.update(("filesystem_write", "github_write"))
+    if _LOCAL_ONLY_CLAIM.search(text):
+        denied.update(("network_egress", "mcp_remote_connect"))
+    if _INNOCUOUS_CLAIM.search(text):
+        denied.update(
+            (
+                "filesystem_write",
+                "network_egress",
+                "github_write",
+                "credential_access",
+                "mcp_remote_connect",
+            )
+        )
+    if _NO_CREDENTIAL_CLAIM.search(text):
+        denied.add("credential_access")
+    if _NO_SHELL_CLAIM.search(text):
+        denied.add("shell_execution")
+    return frozenset(denied)
 
 
 def _line_of(content: str, token: str) -> int:
