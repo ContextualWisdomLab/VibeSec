@@ -18,4 +18,6 @@
   not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
   admission as policy findings; `gh issue create` and `docker push` stay
-  inventory evidence. `.claude-plugin/` is included in the scan walk.
+  inventory evidence. Secret references require a complete environment-variable
+  name, so longer documentation variables do not collide with protected names.
+  `.claude-plugin/` is included in the scan walk.
