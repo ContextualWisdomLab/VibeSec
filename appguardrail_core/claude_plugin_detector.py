@@ -8,7 +8,7 @@ executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, secret copied into a prompt, log, or subprocess environment,
-secret copied into MCP env or args,
+secret copied into MCP env, args, command, URL, or headers,
 a non-standard JSON constant, malformed UTF-8 JSON bytes, a
 non-NFC identity name, conflicting plugin/skill/command identity,
 undeclared vendored or generated third-party
@@ -91,9 +91,9 @@ CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE: Final = (
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE: Final = (
-    "Claude plugin package declares the same identity name on more than one "
-    "plugin, skill, or command surface. Duplicate names conceal which "
-    "surface is admitted. "
+    "Claude plugin package declares the same identity name more than once "
+    "inside one plugin, skill, command, or agent namespace. Duplicate names "
+    "conceal which surface is admitted. "
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
@@ -194,8 +194,8 @@ CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE: Final = (
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
 CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE: Final = (
-    "Claude plugin copies a named secret into an MCP server env, args, or "
-    "command. Keep credentials out of MCP declarations. "
+    "Claude plugin copies a named secret into an MCP server env, args, "
+    "command, URL, or header. Keep credentials out of MCP declarations. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
 CLAUDE_PLUGIN_HIDE_ACTIONS_MESSAGE: Final = (
@@ -274,7 +274,7 @@ _SECRET_TO_NETWORK = re.compile(
     r"(?:curl|wget|fetch)\b[^\n]*\$(?:\{)?(?P<name>"
     r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
     r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
-    r"AWS_SECRET_ACCESS_KEY)(?:\})?",
+    r"AWS_SECRET_ACCESS_KEY)(?![A-Za-z0-9_])(?:\})?",
     re.IGNORECASE,
 )
 _NAMED_SECRET_NAMES: Final = (
@@ -284,9 +284,12 @@ _NAMED_SECRET_NAMES: Final = (
 )
 _NAMED_SECRET_TOKEN = re.compile(_NAMED_SECRET_NAMES, re.IGNORECASE)
 _SECRET_REF = re.compile(
-    r"(?:\$(?:\{)?"
+    r"(?:\$(?:"
     + _NAMED_SECRET_NAMES
-    + r"(?:\})?|"
+    + r")(?![A-Za-z0-9_])|"
+    r"\$\{(?:"
+    + _NAMED_SECRET_NAMES
+    + r")(?:\:-[^}]*)?\}|"
     r"os\.environ\s*\[\s*['\"](?:"
     + _NAMED_SECRET_NAMES
     + r")['\"]\s*\]|"
@@ -903,7 +906,13 @@ def build_claude_plugin_scan_receipt(
         remain. Secret literals never appear on the receipt.
     """
     hits = list(_collect_plugin_hits(root))
-    catalog = _catalog_identity(catalog_payload)
+    catalog, catalog_is_valid = _receipt_catalog_identity(
+        root,
+        catalog_payload,
+        catalog_bytes,
+    )
+    if not catalog_is_valid:
+        hits.append(_invalid_catalog_hit())
     hits.extend(_catalog_bind_hits(root, catalog))
     finding_summary = tuple(sorted({hit.rule_id for hit in hits}))
     identity = _plugin_identity(root)
@@ -1624,8 +1633,19 @@ def _mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
     return tuple(hits)
 
 
+def _mcp_secret_reference_token(value: object) -> str | None:
+    """Return the named secret from an actual MCP environment reference."""
+    if not isinstance(value, str):
+        return None
+    reference = _SECRET_REF.search(value)
+    if reference is None:
+        return None
+    match = _NAMED_SECRET_TOKEN.search(reference.group(0))
+    return match.group(0) if match is not None else None
+
+
 def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
-    """Return hits when MCP env, args, or command carry a named secret.
+    """Return hits when an MCP execution field carries a named secret.
 
     Curl/wget/fetch copies stay the network class. Prompt and log copies
     stay the prompt class. Snippets are the env name only.
@@ -1648,10 +1668,15 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
         env = server.get("env")
         if isinstance(env, dict):
             for key, value in env.items():
-                blob = f"{key} {value}" if isinstance(value, str) else str(key)
-                match = _NAMED_SECRET_TOKEN.search(blob)
-                if match is not None:
-                    token = match.group(0)
+                token = (
+                    key
+                    if isinstance(key, str)
+                    and _NAMED_SECRET_TOKEN.fullmatch(key) is not None
+                    else None
+                )
+                if token is None:
+                    token = _mcp_secret_reference_token(value)
+                if token is not None:
                     return (
                         PluginHit(
                             rule_id="claude-plugin-secret-to-mcp",
@@ -1663,11 +1688,8 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
         args = server.get("args")
         if isinstance(args, list):
             for arg in args:
-                if not isinstance(arg, str):
-                    continue
-                match = _NAMED_SECRET_TOKEN.search(arg)
-                if match is not None:
-                    token = match.group(0)
+                token = _mcp_secret_reference_token(arg)
+                if token is not None:
                     return (
                         PluginHit(
                             rule_id="claude-plugin-secret-to-mcp",
@@ -1676,11 +1698,9 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                             message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
                         ),
                     )
-        command = server.get("command")
-        if isinstance(command, str):
-            match = _NAMED_SECRET_TOKEN.search(command)
-            if match is not None:
-                token = match.group(0)
+        for field_name in ("command", "url"):
+            token = _mcp_secret_reference_token(server.get(field_name))
+            if token is not None:
                 return (
                     PluginHit(
                         rule_id="claude-plugin-secret-to-mcp",
@@ -1689,6 +1709,19 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                         message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
                     ),
                 )
+        headers = server.get("headers")
+        if isinstance(headers, dict):
+            for value in headers.values():
+                token = _mcp_secret_reference_token(value)
+                if token is not None:
+                    return (
+                        PluginHit(
+                            rule_id="claude-plugin-secret-to-mcp",
+                            line=_line_of(content, token),
+                            snippet=token,
+                            message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                        ),
+                    )
     return ()
 
 
@@ -1768,7 +1801,7 @@ def _conflicting_entry_name_hits(
 def _conflicting_identity_hits(
     root: Path, payload: object
 ) -> tuple[PluginHit, ...]:
-    """Return one hit when plugin, skill, or command NFC names collide.
+    """Return one hit when an identity namespace repeats an NFC name.
 
     Non-NFC names stay the normalized-name class. Vendored trees are skipped.
     Duplicate names emit one finding, not one per file.
@@ -1780,36 +1813,42 @@ def _conflicting_identity_hits(
     Returns:
         Zero or one conflicting-identity hit.
     """
-    seen: set[str] = set()
+    seen_by_namespace: dict[str, set[str]] = {"plugin": set()}
     for entry in _plugin_entries(payload):
         name = _nfc_identity_name(entry.get("name"))
         if name is None:
             continue
-        if name in seen:
+        if name in seen_by_namespace["plugin"]:
             return (_conflict_identity_hit(),)
-        seen.add(name)
+        seen_by_namespace["plugin"].add(name)
     for path in _walk_entries(root):
         if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
         if _is_vendored_scope_relative(relative):
             continue
-        name = _identity_name_from_path(path, relative)
-        if name is None:
+        identity = _identity_from_path(path, relative)
+        if identity is None:
             continue
+        namespace, name = identity
+        seen = seen_by_namespace.setdefault(namespace, set())
         if name in seen:
             return (_conflict_identity_hit(),)
         seen.add(name)
     return ()
 
 
-def _identity_name_from_path(path: Path, relative: str) -> str | None:
-    """Return an NFC identity name declared on a skill or command file."""
+def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
+    """Return the namespace and NFC name declared by a local identity file."""
     posix = f"/{relative.replace(chr(92), '/')}/"
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    if relative.startswith("commands/") and path.suffix.lower() == ".md":
+        command_path = relative[len("commands/") : -len(path.suffix)]
+        name = _nfc_identity_name(command_path.replace("/", ":"))
+        return ("skill", name) if name is not None else None
     if path.name == "skill.json":
         try:
             payload = json.loads(content)
@@ -1817,13 +1856,19 @@ def _identity_name_from_path(path: Path, relative: str) -> str | None:
             return None
         if not isinstance(payload, dict):
             return None
-        return _nfc_identity_name(payload.get("name"))
+        name = _nfc_identity_name(payload.get("name"))
+        return ("skill", name) if name is not None else None
     markdown = path.name.lower().endswith(".md") and any(
         marker in posix for marker in ("/skills/", "/commands/", "/agents/")
     )
     if _is_skill_surface(path) or markdown:
         text, _line = _markdown_name(content)
-        return _nfc_identity_name(text)
+        name = _nfc_identity_name(text)
+        if name is None:
+            return None
+        if "/agents/" in posix:
+            return "agent", name
+        return "skill", name
     return None
 
 
@@ -2406,6 +2451,192 @@ def _empty_catalog_identity() -> dict[str, str]:
         "catalog_commit_sha": "",
         **_empty_identity(),
     }
+
+
+class _MarketplaceCatalogError(ValueError):
+    """Raised when a marketplace catalog cannot bind one plugin identity."""
+
+
+def _normalize_marketplace_entry(
+    entry: object,
+    *,
+    plugin_root: object | None = None,
+) -> dict[str, object]:
+    """Return one validated entry with URL/SHA source aliases normalized."""
+    if not isinstance(entry, dict):
+        raise _MarketplaceCatalogError("invalid plugin entry")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise _MarketplaceCatalogError("invalid plugin name")
+    version = entry.get("version")
+    if version is not None and not isinstance(version, str):
+        raise _MarketplaceCatalogError("invalid plugin version")
+    source = entry.get("source")
+    if isinstance(source, str):
+        normalized_path = source.replace("\\", "/")
+        if not normalized_path.startswith("./"):
+            normalized_root = (
+                plugin_root.replace("\\", "/")
+                if isinstance(plugin_root, str)
+                else ""
+            )
+            root_parts = normalized_root[2:].split("/")
+            if (
+                not normalized_path
+                or normalized_path in {".", ".."}
+                or "/" in normalized_path
+                or _CONCEALED_CHAR.search(normalized_path)
+                or (
+                    normalized_root != "."
+                    and (
+                        not normalized_root.startswith("./")
+                        or not root_parts
+                        or any(part in {"", ".", ".."} for part in root_parts)
+                    )
+                )
+            ):
+                raise _MarketplaceCatalogError("invalid relative plugin source")
+            normalized_path = (
+                f"./{normalized_path}"
+                if normalized_root == "."
+                else f"{normalized_root}/{normalized_path}"
+            )
+        path_parts = normalized_path[2:].split("/")
+        if (
+            not normalized_path.startswith("./")
+            or not path_parts
+            or any(part in {"", ".", ".."} for part in path_parts)
+            or _CONCEALED_CHAR.search(normalized_path)
+        ):
+            raise _MarketplaceCatalogError("invalid relative plugin source")
+        normalized = dict(entry)
+        normalized["source"] = {"path": normalized_path}
+        return normalized
+    if not isinstance(source, dict):
+        raise _MarketplaceCatalogError("invalid plugin source")
+    normalized_source = dict(source)
+    repository = source.get("repo")
+    url = source.get("url")
+    if repository is None:
+        if not isinstance(url, str) or not url:
+            raise _MarketplaceCatalogError("invalid source repository")
+        normalized_source["repo"] = url
+    elif not isinstance(repository, str) or not repository:
+        raise _MarketplaceCatalogError("invalid source repository")
+    elif url is not None and (not isinstance(url, str) or not url):
+        raise _MarketplaceCatalogError("invalid source URL")
+    sha = source.get("sha")
+    ref = source.get("ref")
+    if sha is not None:
+        if not isinstance(sha, str) or not sha:
+            raise _MarketplaceCatalogError("invalid source SHA")
+        normalized_source["ref"] = sha
+    elif not isinstance(ref, str) or not ref:
+        raise _MarketplaceCatalogError("invalid source ref")
+    path_value = source.get("path")
+    if path_value is not None and not isinstance(path_value, str):
+        raise _MarketplaceCatalogError("invalid source path")
+    normalized = dict(entry)
+    normalized["source"] = normalized_source
+    return normalized
+
+
+def _select_marketplace_entry(
+    payload: object | None,
+    root: Path,
+) -> dict[str, object]:
+    """Select exactly one valid catalog entry for the materialized plugin."""
+    if not isinstance(payload, dict):
+        raise _MarketplaceCatalogError("invalid catalog document")
+    plugin_name = _plugin_identity(root)["plugin_name"]
+    if not plugin_name:
+        raise _MarketplaceCatalogError("materialized plugin identity is missing")
+    metadata = payload.get("metadata")
+    plugin_root = metadata.get("pluginRoot") if isinstance(metadata, dict) else None
+    plugins = payload.get("plugins")
+    if plugins is None:
+        selected = _normalize_marketplace_entry(payload, plugin_root=plugin_root)
+        if selected["name"] != plugin_name:
+            raise _MarketplaceCatalogError("catalog entry does not match plugin")
+        return selected
+    if not isinstance(plugins, list):
+        raise _MarketplaceCatalogError("invalid plugins collection")
+    matches: list[dict[str, object]] = []
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            raise _MarketplaceCatalogError("invalid plugin entry")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise _MarketplaceCatalogError("invalid plugin name")
+        version = entry.get("version")
+        if version is not None and not isinstance(version, str):
+            raise _MarketplaceCatalogError("invalid plugin version")
+        if name == plugin_name:
+            matches.append(entry)
+    if len(matches) != 1:
+        raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
+    normalized_match = _normalize_marketplace_entry(
+        matches[0], plugin_root=plugin_root
+    )
+    selected = dict(payload)
+    selected["plugins"] = [normalized_match]
+    return selected
+
+
+def _json_documents_match(left: object, right: object) -> bool:
+    """Return whether two parsed JSON values have the same canonical value."""
+    try:
+        return json.dumps(
+            left,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ) == json.dumps(
+            right,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _receipt_catalog_identity(
+    root: Path,
+    catalog_payload: object | None,
+    catalog_bytes: bytes | None,
+) -> tuple[dict[str, str], bool]:
+    """Derive catalog identity from authoritative bytes and report validity."""
+    payload = catalog_payload
+    valid = True
+    if catalog_bytes is not None:
+        try:
+            parsed = _load_manifest_json(catalog_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember):
+            return _empty_catalog_identity(), False
+        if catalog_payload is not None and not _json_documents_match(
+            catalog_payload, parsed
+        ):
+            valid = False
+        payload = parsed
+    if payload is None:
+        return _empty_catalog_identity(), valid
+    try:
+        selected = _select_marketplace_entry(payload, root)
+    except _MarketplaceCatalogError:
+        return _empty_catalog_identity(), False
+    return _catalog_identity(selected), valid
+
+
+def _invalid_catalog_hit() -> PluginHit:
+    """Return a bounded fail-closed finding for an invalid catalog binding."""
+    return PluginHit(
+        rule_id="claude-plugin-source-mismatch",
+        line=1,
+        snippet="catalog_identity",
+        message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+        file="marketplace.json",
+    )
 
 
 def _catalog_identity(payload: object | None) -> dict[str, str]:
