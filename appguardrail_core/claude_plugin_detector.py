@@ -5,7 +5,8 @@ titles. A floating Git ref, provider secret, pipe-to-shell installer,
 unsigned executable download, package.json lifecycle download, unpinned
 package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
-escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
+escape, decompression bomb or nested-archive depth, unadmitted nested
+submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, secret copied into a prompt, log, or subprocess environment,
 secret copied into MCP env, args, command, URL, or headers,
@@ -22,7 +23,10 @@ homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
 instruction-override family. Setuid, setgid, or world-writable executable
-and hook files fail admission. A lockfile-backed package.json without a
+and hook files fail admission. Zip or tar members whose uncompressed size
+divided by compressed size exceeds the bounded ratio, or nested archives
+beyond a small depth, fail admission without extracting the payload.
+A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
 not hook scans.
 """
@@ -32,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import configparser
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -144,6 +149,13 @@ CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
     "budget. Hostile oversized trees fail admission. "
     "[CWE-400 - Uncontrolled Resource Consumption]"
 )
+CLAUDE_PLUGIN_DECOMPRESSION_BOMB_MESSAGE: Final = (
+    "Claude plugin archive member expands far beyond its compressed size, "
+    "nests archives beyond the bounded depth, or the archive's total "
+    "uncompressed regular-member bytes exceed the package budget. Do not "
+    "extract the payload. "
+    "[CWE-409 - Improper Handling of Highly Compressed Data (Data Amplification)]"
+)
 CLAUDE_PLUGIN_SETUID_EXECUTABLE_MESSAGE: Final = (
     "Claude plugin executable or hook has the setuid or setgid bit. "
     "Privilege-elevating modes fail admission. "
@@ -251,6 +263,8 @@ CLAUDE_PLUGIN_VENDORED_SCOPE_MESSAGE: Final = (
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
+_MAX_ARCHIVE_COMPRESSION_RATIO: Final = 100
+_MAX_ARCHIVE_NESTING_DEPTH: Final = 1
 _CONCEALED_CHAR = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200d\u202a-\u202e\u2066-\u2069]"
 )
@@ -778,9 +792,10 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     Returns:
         Undeclared executable, hidden undeclared executable or config,
         undeclared vendored or generated scope, license absence or SPDX
-        mismatch, size, symlink, archive traversal, unadmitted-submodule,
-        setuid or world-writable executable modes, and deceptive
-        description findings. Empty when the tree is not a plugin package
+        mismatch, size, symlink, archive traversal, decompression bomb,
+        unadmitted-submodule, setuid or world-writable executable modes,
+        and deceptive description findings. Empty when the tree is not a
+        plugin package
         or every hook is a declared regular file. Inventory presence is
         not a finding. An empty description is not this class. Git
         metadata is not a plugin executable surface. ``.mcp.json`` stays
@@ -828,6 +843,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         )
     hits.extend(_source_mismatch_hits(root))
     hits.extend(_archive_traversal_hits(root))
+    hits.extend(_decompression_bomb_hits(root))
     hits.extend(_unadmitted_submodule_hits(root))
     hits.extend(_vendored_scope_hits(root, payload))
     hits.extend(_conflicting_identity_hits(root, payload))
@@ -877,19 +893,29 @@ def inspect_claude_plugin_archive(
 
     Members whose names leave the extract root (``../``, absolute POSIX
     paths, Windows drive or UNC prefixes) are findings and are never
-    written. Safe members are materialized under ``extract_root``. Snippets
-    record a sanitized member-path label only.
+    written. Members whose uncompressed size divided by compressed size
+    exceeds ``_MAX_ARCHIVE_COMPRESSION_RATIO``, nested archives deeper
+    than ``_MAX_ARCHIVE_NESTING_DEPTH``, or archives whose regular
+    in-root members sum above ``_MAX_PACKAGE_BYTES`` are
+    decompression-bomb findings and are never written. Safe members are
+    materialized under ``extract_root``. Snippets record a sanitized
+    member-path label only.
 
     Args:
         archive_path: Regular zip or tar file.
         extract_root: Bounded destination root.
 
     Returns:
-        Path-traversal hits. Empty when every member stays inside the root
-        or ``archive_path`` is not a readable archive. Secret literals and
-        raw archive bytes never appear in snippets.
+        Path-traversal and decompression-bomb hits. Empty when every
+        member stays inside the root, stays within the ratio/depth/byte
+        bounds, or ``archive_path`` is not a readable archive. Secret
+        literals and raw archive bytes never appear in snippets.
     """
     hits, safe_members = _classify_archive_members(archive_path, extract_root)
+    bomb_hits = _inspect_archive_decompression_bombs(archive_path, extract_root)
+    budget_hits = _archive_aggregate_budget_hits(archive_path, extract_root)
+    if bomb_hits or budget_hits:
+        return (*hits, *bomb_hits, *budget_hits)
     for name in safe_members:
         _extract_archive_member(archive_path, name, extract_root)
     return hits
@@ -3121,6 +3147,73 @@ def _archive_member_names(archive_path: Path) -> tuple[tuple[str, ...], bool]:
     return (), False
 
 
+def _archive_aggregate_budget_hits(
+    archive_path: Path, extract_root: Path
+) -> tuple[PluginHit, ...]:
+    """Return a bomb finding when in-root regular members exceed the byte budget.
+
+    Uses archive metadata only (zip ``ZipInfo.file_size``, tar regular
+    ``TarInfo.size``). Traversal members and directories are omitted.
+    Payload bytes are not read or written.
+
+    Args:
+        archive_path: Candidate zip or tar file.
+        extract_root: Bounded destination root used to exclude escapes.
+
+    Returns:
+        One decompression-bomb hit when the summed uncompressed size of
+        regular in-root members is greater than ``_MAX_PACKAGE_BYTES``.
+        Empty when the archive is unreadable, not an archive, or the
+        total stays within budget.
+    """
+    total = _archive_regular_in_root_bytes(archive_path, extract_root)
+    if total is None or total <= _MAX_PACKAGE_BYTES:
+        return ()
+    relative = _archive_display_path(archive_path, extract_root)
+    return (_decompression_bomb_hit(relative, archive_path.name),)
+
+
+def _archive_regular_in_root_bytes(
+    archive_path: Path, extract_root: Path
+) -> int | None:
+    """Return summed uncompressed bytes of regular in-root members.
+
+    Args:
+        archive_path: Candidate zip or tar file.
+        extract_root: Bounded destination root used to exclude escapes.
+
+    Returns:
+        Non-negative byte total, or ``None`` when the archive cannot be
+        read as zip/tar metadata. Directories and escaping names are
+        skipped. Payload contents are not read.
+    """
+    kind = _archive_kind_from_name(archive_path.name)
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(archive_path) as archive:
+                total = 0
+                for info in archive.infolist():
+                    if _zip_member_is_dir(info):
+                        continue
+                    if _archive_member_escapes(info.filename, extract_root):
+                        continue
+                    total += info.file_size
+                return total
+        if kind == "tar":
+            with tarfile.open(archive_path) as archive:
+                total = 0
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    if _archive_member_escapes(member.name, extract_root):
+                        continue
+                    total += member.size
+                return total
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return None
+    return 0
+
+
 def _classify_archive_members(
     archive_path: Path, extract_root: Path
 ) -> tuple[tuple[PluginHit, ...], tuple[str, ...]]:
@@ -3198,6 +3291,225 @@ def _archive_traversal_hits(root: Path) -> tuple[PluginHit, ...]:
             continue
         member_hits, _safe = _classify_archive_members(path, root)
         hits.extend(member_hits)
+    return tuple(hits)
+
+
+def _ratio_is_bomb(uncompressed: int, compressed: int) -> bool:
+    """Return whether uncompressed/compressed exceeds the bounded ratio.
+
+    Args:
+        uncompressed: Claimed uncompressed member size in bytes.
+        compressed: Stored compressed size in bytes.
+
+    Returns:
+        True when ``uncompressed`` is positive and the ratio is greater
+        than ``_MAX_ARCHIVE_COMPRESSION_RATIO``. Empty members are not
+        bombs. A zero compressed size is treated as one byte so a claimed
+        payload with no stored bytes still fails closed.
+    """
+    if uncompressed <= 0:
+        return False
+    return uncompressed / max(compressed, 1) > _MAX_ARCHIVE_COMPRESSION_RATIO
+
+
+def _is_archive_member_name(name: str) -> bool:
+    """Return whether ``name`` uses a zip or tar suffix."""
+    return _archive_kind_from_name(name) is not None
+
+
+def _archive_kind_from_name(name: str) -> str | None:
+    """Return ``zip`` or ``tar`` from a member or file name suffix."""
+    lowered = name.lower().replace("\\", "/")
+    if lowered.endswith(".zip"):
+        return "zip"
+    if lowered.endswith(_ARCHIVE_SUFFIXES):
+        return "tar"
+    return None
+
+
+def _decompression_bomb_hit(archive_file: str, member_name: str) -> PluginHit:
+    """Return one decompression-bomb finding with a sanitized path label."""
+    return PluginHit(
+        rule_id="claude-plugin-decompression-bomb",
+        line=1,
+        snippet=_sanitize_path_snippet(member_name),
+        message=CLAUDE_PLUGIN_DECOMPRESSION_BOMB_MESSAGE,
+        file=archive_file,
+    )
+
+
+def _zip_member_is_dir(info: zipfile.ZipInfo) -> bool:
+    """Return whether ``info`` is a directory member."""
+    name = info.filename
+    return info.is_dir() or name.endswith("/") or name.endswith("\\")
+
+
+def _zip_handle_bomb_hits(
+    archive: zipfile.ZipFile,
+    display_file: str,
+    extract_root: Path,
+    depth: int,
+) -> tuple[PluginHit, ...]:
+    """Return bomb hits for one opened zip without writing members."""
+    hits: list[PluginHit] = []
+    for info in archive.infolist():
+        name = info.filename
+        if _zip_member_is_dir(info):
+            continue
+        if _archive_member_escapes(name, extract_root):
+            continue
+        if _ratio_is_bomb(info.file_size, info.compress_size):
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        if not _is_archive_member_name(name):
+            continue
+        nested_depth = depth + 1
+        if nested_depth > _MAX_ARCHIVE_NESTING_DEPTH:
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        if info.file_size > _MAX_PACKAGE_BYTES:
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        try:
+            payload = archive.read(name)
+        except (OSError, KeyError, RuntimeError, zipfile.BadZipFile, ValueError):
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        hits.extend(
+            _inspect_archive_bytes_decompression_bombs(
+                payload,
+                display_file=display_file,
+                member_name=name,
+                extract_root=extract_root,
+                depth=nested_depth,
+            )
+        )
+    return tuple(hits)
+
+
+def _tar_handle_bomb_hits(
+    archive: tarfile.TarFile,
+    display_file: str,
+    extract_root: Path,
+    depth: int,
+    compressed_size: int,
+) -> tuple[PluginHit, ...]:
+    """Return bomb hits for one opened tar without writing members."""
+    hits: list[PluginHit] = []
+    for member in archive.getmembers():
+        if not member.isfile():
+            continue
+        name = member.name
+        if _archive_member_escapes(name, extract_root):
+            continue
+        if _ratio_is_bomb(member.size, compressed_size):
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        if not _is_archive_member_name(name):
+            continue
+        nested_depth = depth + 1
+        if nested_depth > _MAX_ARCHIVE_NESTING_DEPTH:
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        if member.size > _MAX_PACKAGE_BYTES:
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        try:
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            payload = extracted.read()
+        except (OSError, tarfile.TarError, ValueError):
+            hits.append(_decompression_bomb_hit(display_file, name))
+            continue
+        hits.extend(
+            _inspect_archive_bytes_decompression_bombs(
+                payload,
+                display_file=display_file,
+                member_name=name,
+                extract_root=extract_root,
+                depth=nested_depth,
+            )
+        )
+    return tuple(hits)
+
+
+def _inspect_archive_bytes_decompression_bombs(
+    payload: bytes,
+    *,
+    display_file: str,
+    member_name: str,
+    extract_root: Path,
+    depth: int,
+) -> tuple[PluginHit, ...]:
+    """Inspect nested archive bytes in memory without writing the payload."""
+    kind = _archive_kind_from_name(member_name)
+    buffer = io.BytesIO(payload)
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(buffer) as archive:
+                return _zip_handle_bomb_hits(archive, display_file, extract_root, depth)
+        if kind == "tar":
+            with tarfile.open(fileobj=buffer, mode="r:*") as archive:
+                return _tar_handle_bomb_hits(
+                    archive, display_file, extract_root, depth, len(payload)
+                )
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return (_decompression_bomb_hit(display_file, member_name),)
+    return ()
+
+
+def _inspect_archive_decompression_bombs(
+    archive_path: Path,
+    extract_root: Path,
+    *,
+    depth: int = 0,
+) -> tuple[PluginHit, ...]:
+    """Inspect one archive path for ratio or nesting bombs without extracting."""
+    try:
+        if archive_path.is_symlink() or not archive_path.is_file():
+            return ()
+    except OSError:
+        return ()
+    relative = _archive_display_path(archive_path, extract_root)
+    kind = _archive_kind_from_name(archive_path.name)
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(archive_path) as archive:
+                return _zip_handle_bomb_hits(archive, relative, extract_root, depth)
+        if kind == "tar":
+            compressed_size = archive_path.stat().st_size
+            with tarfile.open(archive_path) as archive:
+                return _tar_handle_bomb_hits(
+                    archive, relative, extract_root, depth, compressed_size
+                )
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, ValueError):
+        return ()
+    return ()
+
+
+def _decompression_bomb_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return decompression-bomb findings for zip/tar files inside ``root``.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Hits for members whose uncompressed/compressed ratio exceeds
+        ``_MAX_ARCHIVE_COMPRESSION_RATIO`` or whose nested zip/tar depth
+        exceeds ``_MAX_ARCHIVE_NESTING_DEPTH``. Path-traversal members stay
+        the traversal class. Oversized file-count or byte-count trees stay
+        the oversized class. Snippets are path labels; payloads are not
+        extracted.
+    """
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        try:
+            if path.is_symlink() or not path.is_file() or not _is_archive_path(path):
+                continue
+        except OSError:
+            continue
+        hits.extend(_inspect_archive_decompression_bombs(path, root))
     return tuple(hits)
 
 
