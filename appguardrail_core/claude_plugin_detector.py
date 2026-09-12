@@ -66,6 +66,17 @@ CLAUDE_PLUGIN_LICENSE_MISSING_MESSAGE: Final = (
     "evidence without inventing legal approval. "
     "[CWE-1104 - Use of Unmaintained Third Party Components]"
 )
+CLAUDE_PLUGIN_LICENSE_MISMATCH_MESSAGE: Final = (
+    "Claude plugin license evidence names more than one SPDX identifier. "
+    "Record the conflict without inventing legal approval. "
+    "[CWE-1104 - Use of Unmaintained Third Party Components]"
+)
+_SPDX_TOKEN = re.compile(
+    r"\b(Apache-2\.0|MIT|BSD-2-Clause|BSD-3-Clause|GPL-3\.0-only|"
+    r"GPL-3\.0-or-later|LGPL-3\.0-only|AGPL-3\.0-only|MPL-2\.0|ISC|"
+    r"Unlicense|CC0-1\.0|0BSD)\b",
+    re.IGNORECASE,
+)
 CLAUDE_PLUGIN_CONCEALED_IDENTITY_MESSAGE: Final = (
     "Claude plugin manifest contains concealed control or bidirectional "
     "formatting characters. Decode identity before admission. "
@@ -455,10 +466,10 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         root: Scan root that may contain ``.claude-plugin/``.
 
     Returns:
-        Undeclared executable, license, size, symlink, archive traversal, and
-        unadmitted-submodule findings. Empty when the tree is not a plugin
-        package or every hook is a declared regular file. Inventory presence
-        is not a finding.
+        Undeclared executable, license absence or SPDX mismatch, size, symlink,
+        archive traversal, and unadmitted-submodule findings. Empty when the
+        tree is not a plugin package or every hook is a declared regular file.
+        Inventory presence is not a finding.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -467,6 +478,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     if not manifest_path.is_file() or manifest_path.is_symlink():
         manifest_path = plugin_dir / "marketplace.json"
     declared: set[str] = set()
+    payload: object = {}
     if manifest_path.is_file() and not manifest_path.is_symlink():
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -484,6 +496,10 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 file=".claude-plugin",
             )
         )
+    elif isinstance(payload, dict):
+        hits.extend(_license_mismatch_hits(root, payload))
+    else:
+        hits.extend(_license_mismatch_hits(root, {}))
     _, file_count, scanned_byte_count = _artifact_digest(root)
     if file_count > _MAX_PACKAGE_FILES or scanned_byte_count > _MAX_PACKAGE_BYTES:
         hits.append(
@@ -1180,10 +1196,57 @@ def _license_summary(root: Path) -> str:
     """Return present license path names or ``absent`` without legal approval."""
     names = [
         path.relative_to(root).as_posix()
-        for path in _walk_entries(root)
-        if not path.is_symlink() and path.name.upper().startswith("LICENSE")
+        for path in _license_evidence_paths(root)
     ]
     return ",".join(names) if names else "absent"
+
+
+def _license_evidence_paths(root: Path) -> tuple[Path, ...]:
+    """Return LICENSE* and NOTICE* regular files, never following symlinks."""
+    found: list[Path] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        upper = path.name.upper()
+        if upper.startswith("LICENSE") or upper.startswith("NOTICE"):
+            found.append(path)
+    return tuple(found)
+
+
+def _spdx_tokens_from_text(text: str) -> set[str]:
+    """Return known SPDX identifiers found in ``text`` without legal approval."""
+    return {match.group(1).upper() for match in _SPDX_TOKEN.finditer(text)}
+
+
+def _declared_license_expression(payload: dict) -> str:
+    """Return a string license field from a plugin manifest, if present."""
+    value = payload.get("license")
+    return value if isinstance(value, str) else ""
+
+
+def _license_mismatch_hits(root: Path, payload: dict) -> tuple[PluginHit, ...]:
+    """Return a finding when SPDX tokens in license evidence disagree."""
+    tokens: set[str] = set()
+    declared = _declared_license_expression(payload)
+    tokens.update(_spdx_tokens_from_text(declared))
+    for path in _license_evidence_paths(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        tokens.update(_spdx_tokens_from_text(text))
+    if len(tokens) < 2:
+        return ()
+    snippet = ",".join(sorted(tokens))[:120]
+    return (
+        PluginHit(
+            rule_id="claude-plugin-license-mismatch",
+            line=1,
+            snippet=snippet,
+            message=CLAUDE_PLUGIN_LICENSE_MISMATCH_MESSAGE,
+            file=".claude-plugin",
+        ),
+    )
 
 
 def _empty_identity() -> dict[str, str]:

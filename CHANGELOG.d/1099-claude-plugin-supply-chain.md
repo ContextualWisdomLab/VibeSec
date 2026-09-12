@@ -37,4 +37,7 @@
   identity that disagrees with the retrieved artifact fails closed.
   Receipt `sarif_sha256` is the SHA-256 of a deterministic SARIF 2.1.0
   document covering the same finding rule_ids as `finding_summary`.
+  LICENSE/NOTICE absence still fails closed; conflicting SPDX identifiers
+  across the declared license field, LICENSE, and NOTICE fail as
+  `claude-plugin-license-mismatch` without inventing legal approval.
   `.claude-plugin/` is included in the scan walk.
