@@ -348,6 +348,7 @@ _SKILL_SUPPLY_CHAIN_RULE_IDS: Final = frozenset(
     }
 )
 _SKILL_SURFACE_NAMES: Final = frozenset({"SKILL.md", "skill.json", "agent.md"})
+_SKILL_MARKDOWN_DIRS: Final = frozenset({"commands", "agents"})
 _DESCRIPTION_JSON_NAMES: Final = frozenset(
     {"plugin.json", "marketplace.json", "skill.json"}
 )
@@ -2784,13 +2785,29 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
 
 
 def _is_skill_surface(path: Path) -> bool:
-    """Return whether ``path`` is a released #1036 skill or agent surface."""
+    """Return whether ``path`` is a released #1036 skill, agent, or command surface.
+
+    Basename ``SKILL.md``, ``skill.json``, ``agent.md``, and ``*.skill.md``
+    remain surfaces. Markdown under a ``commands/`` or ``agents/`` directory
+    is the same instruction class. Root ``AGENTS.md``, ``README.md``, and
+    command shell files are not this class.
+
+    Args:
+        path: Candidate plugin file.
+
+    Returns:
+        True when the file is a skill, agent, or command instruction surface.
+    """
     name = path.name
-    return name in _SKILL_SURFACE_NAMES or name.endswith(".skill.md")
+    if name in _SKILL_SURFACE_NAMES or name.endswith(".skill.md"):
+        return True
+    if not name.lower().endswith(".md"):
+        return False
+    return any(part.lower() in _SKILL_MARKDOWN_DIRS for part in path.parts[:-1])
 
 
 def _skill_supply_chain_hits(root: Path) -> tuple[PluginHit, ...]:
-    """Reuse released #1036 rule identities on plugin skill/agent files.
+    """Reuse released #1036 rule identities on plugin skill, agent, and command files.
 
     Homoglyph, injection, exfiltration, and placeholder detection stay in
     ``scanner/rules/skill_supply_chain.yml``. This adapter does not copy those
@@ -2801,8 +2818,8 @@ def _skill_supply_chain_hits(root: Path) -> tuple[PluginHit, ...]:
 
     Returns:
         Hits whose ``rule_id`` values are the released skill-supply-chain
-        identities. Empty when no skill surface exists or the YAML pack is
-        absent.
+        identities. Empty when no skill, agent, or command surface exists
+        or the YAML pack is absent.
     """
     from scanner.cli.appguardrail import _scan_file
 
