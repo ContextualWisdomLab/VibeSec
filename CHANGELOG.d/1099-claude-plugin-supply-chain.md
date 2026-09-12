@@ -20,4 +20,7 @@
   admission as policy findings; `gh issue create` and `docker push` stay
   inventory evidence. Secret references require a complete environment-variable
   name, so longer documentation variables do not collide with protected names.
-  `.claude-plugin/` is included in the scan walk.
+  Unsigned `curl`/`wget` executable fetches and
+  unpinned pip/npm/cargo URL installs fail admission; a `package.json`
+  plus lockfile without a postinstall download stays `package_install`
+  inventory. `.claude-plugin/` is included in the scan walk.
