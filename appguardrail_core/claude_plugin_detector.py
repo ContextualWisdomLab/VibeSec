@@ -88,9 +88,9 @@ CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE: Final = (
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE: Final = (
-    "Claude plugin package declares the same identity name on more than one "
-    "plugin, skill, or command surface. Duplicate names conceal which "
-    "surface is admitted. "
+    "Claude plugin package declares the same identity name more than once "
+    "inside one plugin, skill, command, or agent namespace. Duplicate names "
+    "conceal which surface is admitted. "
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
@@ -1719,7 +1719,7 @@ def _conflicting_entry_name_hits(
 def _conflicting_identity_hits(
     root: Path, payload: object
 ) -> tuple[PluginHit, ...]:
-    """Return one hit when plugin, skill, or command NFC names collide.
+    """Return one hit when an identity namespace repeats an NFC name.
 
     Non-NFC names stay the normalized-name class. Vendored trees are skipped.
     Duplicate names emit one finding, not one per file.
@@ -1731,36 +1731,42 @@ def _conflicting_identity_hits(
     Returns:
         Zero or one conflicting-identity hit.
     """
-    seen: set[str] = set()
+    seen_by_namespace: dict[str, set[str]] = {"plugin": set()}
     for entry in _plugin_entries(payload):
         name = _nfc_identity_name(entry.get("name"))
         if name is None:
             continue
-        if name in seen:
+        if name in seen_by_namespace["plugin"]:
             return (_conflict_identity_hit(),)
-        seen.add(name)
+        seen_by_namespace["plugin"].add(name)
     for path in _walk_entries(root):
         if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
         if _is_vendored_scope_relative(relative):
             continue
-        name = _identity_name_from_path(path, relative)
-        if name is None:
+        identity = _identity_from_path(path, relative)
+        if identity is None:
             continue
+        namespace, name = identity
+        seen = seen_by_namespace.setdefault(namespace, set())
         if name in seen:
             return (_conflict_identity_hit(),)
         seen.add(name)
     return ()
 
 
-def _identity_name_from_path(path: Path, relative: str) -> str | None:
-    """Return an NFC identity name declared on a skill or command file."""
+def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
+    """Return the namespace and NFC name declared by a local identity file."""
     posix = f"/{relative.replace(chr(92), '/')}/"
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    if relative.startswith("commands/") and path.suffix.lower() == ".md":
+        command_path = relative[len("commands/") : -len(path.suffix)]
+        name = _nfc_identity_name(command_path.replace("/", ":"))
+        return ("skill", name) if name is not None else None
     if path.name == "skill.json":
         try:
             payload = json.loads(content)
@@ -1768,13 +1774,19 @@ def _identity_name_from_path(path: Path, relative: str) -> str | None:
             return None
         if not isinstance(payload, dict):
             return None
-        return _nfc_identity_name(payload.get("name"))
+        name = _nfc_identity_name(payload.get("name"))
+        return ("skill", name) if name is not None else None
     markdown = path.name.lower().endswith(".md") and any(
         marker in posix for marker in ("/skills/", "/commands/", "/agents/")
     )
     if _is_skill_surface(path) or markdown:
         text, _line = _markdown_name(content)
-        return _nfc_identity_name(text)
+        name = _nfc_identity_name(text)
+        if name is None:
+            return None
+        if "/agents/" in posix:
+            return "agent", name
+        return "skill", name
     return None
 
 
