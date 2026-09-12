@@ -70,6 +70,24 @@ def test_dashboard_drag_drop_has_visible_state_and_clears_it():
     assert "addEventListener(\"drop\"" in html
 
 
+def test_dashboard_header_file_picker_proxy_contract():
+    """The header button must activate the same hidden native file picker."""
+    html = dashboard_index_path().read_text(encoding="utf-8")
+
+    assert (
+        '<button type="button" id="header-browse" class="primary-action" '
+        'style="margin-left:12px">Upload findings file</button>'
+    ) in html
+    assert '<input type="file" id="file" accept="application/json,.json" hidden>' in html
+    assert "const fileInput = document.getElementById('file');" in html
+    assert (
+        "document.getElementById('header-browse')?.addEventListener('click', "
+        "() => fileInput.click());"
+    ) in html
+    assert "fileInput.addEventListener('change'" in html
+    assert "fileInput.value = '';" in html
+
+
 def test_dashboard_rows_are_keyboard_accessible():
     """Interactive finding rows must expose keyboard and screen-reader affordances."""
     html = dashboard_index_path().read_text(encoding="utf-8")
@@ -77,7 +95,6 @@ def test_dashboard_rows_are_keyboard_accessible():
     assert 'tabindex="0" role="button"' in html
     assert 'title="View details for finding"' in html
     assert "tbody tr:focus-visible" in html
-    assert ">Upload findings file</button>" in html
     assert "aria-label=\"Search findings\"" in html
     assert "aria-label=\"Filter by severity\"" in html
     assert "tr.addEventListener('keydown'" in html
