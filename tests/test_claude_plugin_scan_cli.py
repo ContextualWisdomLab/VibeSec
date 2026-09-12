@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import sys
 from pathlib import Path
 
@@ -314,19 +315,61 @@ def test_scan_plugin_rejects_symlink_root_and_non_json_marketplace(
     oversized.write_bytes(b"[" + (b" " * (MAX_MARKETPLACE_BYTES + 1)) + b"]")
     assert scan_plugin_artifact(root, marketplace_entry=oversized) == 1
 
-    original_read = Path.read_bytes
+    no_matches = tmp_path / "no-matches.json"
+    no_matches.write_text('{"plugins": []}\n', encoding="utf-8")
+    assert scan_plugin_artifact(root, marketplace_entry=no_matches) == 1
 
-    def boom_read(self: Path) -> bytes:
+    original_open = Path.open
+
+    def boom_open(self: Path, *args: object, **kwargs: object) -> object:
         """Raise on the marketplace file only."""
         if self == binary:
             raise OSError("denied")
-        return original_read(self)
+        return original_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", boom_read)
+    monkeypatch.setattr(Path, "open", boom_open)
     assert scan_plugin_artifact(root, marketplace_entry=binary) == 1
     captured = capsys.readouterr()
     assert _SECRET not in captured.out
     assert _SECRET not in captured.err
+
+
+def test_marketplace_reader_stops_after_size_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalog loader never reads an oversized marketplace in full."""
+    from appguardrail_core import claude_plugin_scan_cli as cli
+
+    marketplace = tmp_path / "oversized.json"
+    marketplace.write_bytes(b"{}")
+    read_sizes: list[int] = []
+    original_open = Path.open
+
+    class TrackingReader(BytesIO):
+        """Record the one bounded read requested by the catalog loader."""
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            return b"x" * size
+
+    def tracking_open(self: Path, *args: object, **kwargs: object) -> object:
+        """Return a controlled marketplace stream and real streams otherwise."""
+        if self == marketplace:
+            return TrackingReader()
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+
+    status, payload, data = cli._load_marketplace_catalog(
+        marketplace,
+        __import__("io").StringIO(),
+    )
+
+    assert status == 1
+    assert payload is None
+    assert data is None
+    assert read_sizes == [cli.MAX_MARKETPLACE_BYTES + 1]
 
 
 def test_scan_plugin_receipt_write_and_verify_edges(
