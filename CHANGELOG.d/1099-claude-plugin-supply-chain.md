@@ -135,3 +135,10 @@
   ``docker push`` stay inventory. Hardcoded PATs stay
   `claude-plugin-github-write-token`. Snippets are command labels, not
   tokens.
+  Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
+  ``~/.config/gh/hosts.yml``, Docker ``config.json`` auth, ``cookies.txt``,
+  ``~/.curl_home``, and ``~/.ssh/id_*`` private keys fail as
+  `claude-plugin-credential-store-access`. Chrome and Firefox profile
+  stores stay `claude-plugin-browser-profile-access`. README AWS wording,
+  ``gh issue create``, ``docker push``, and a declared ``0755`` echo hook
+  are not that class. Snippets are path labels, not secret values.
