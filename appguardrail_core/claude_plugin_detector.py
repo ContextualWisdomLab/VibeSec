@@ -7,7 +7,8 @@ package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
-request, a description that denies inventoried write, network, GitHub
+request, a non-standard JSON constant, a description that denies inventoried
+write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
@@ -67,6 +68,11 @@ CLAUDE_PLUGIN_SYMLINK_ESCAPE_MESSAGE: Final = (
 CLAUDE_PLUGIN_DUPLICATE_JSON_MESSAGE: Final = (
     "Claude plugin manifest contains duplicate JSON object members. Duplicate "
     "keys conceal identity and must fail admission. "
+    "[CWE-20 - Improper Input Validation]"
+)
+CLAUDE_PLUGIN_NONSTANDARD_JSON_MESSAGE: Final = (
+    "Claude plugin manifest contains a non-standard JSON constant. NaN, "
+    "Infinity, and -Infinity are not JSON numbers and must fail admission. "
     "[CWE-20 - Improper Input Validation]"
 )
 CLAUDE_PLUGIN_UNBOUNDED_MCP_MESSAGE: Final = (
@@ -1219,6 +1225,16 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
                 message=CLAUDE_PLUGIN_DUPLICATE_JSON_MESSAGE,
             ),
         )
+    except _NonstandardJsonConstant as exc:
+        token = str(exc)
+        return (
+            PluginHit(
+                rule_id="claude-plugin-nonstandard-json-constant",
+                line=_line_of(content, token),
+                snippet=_sanitize_plugin_snippet(token)[:120],
+                message=CLAUDE_PLUGIN_NONSTANDARD_JSON_MESSAGE,
+            ),
+        )
     except json.JSONDecodeError:
         return ()
     for entry in _plugin_entries(payload):
@@ -1266,8 +1282,12 @@ class _DuplicateJsonMember(ValueError):
     """Raised when a JSON object repeats a member name."""
 
 
+class _NonstandardJsonConstant(ValueError):
+    """Raised when JSON contains NaN, Infinity, or -Infinity."""
+
+
 def _load_manifest_json(content: str) -> object:
-    """Parse JSON while rejecting duplicate object members."""
+    """Parse JSON while rejecting duplicate members and non-standard constants."""
 
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         """Fail closed when a JSON object repeats a member name."""
@@ -1280,7 +1300,15 @@ def _load_manifest_json(content: str) -> object:
             result[key] = value
         return result
 
-    return json.loads(content, object_pairs_hook=object_pairs)
+    def parse_constant(name: str) -> object:
+        """Fail closed on NaN, Infinity, and -Infinity."""
+        raise _NonstandardJsonConstant(name)
+
+    return json.loads(
+        content,
+        object_pairs_hook=object_pairs,
+        parse_constant=parse_constant,
+    )
 
 
 def _mcp_is_bounded(server: dict) -> bool:

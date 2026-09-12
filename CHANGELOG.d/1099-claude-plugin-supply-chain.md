@@ -58,3 +58,7 @@
   `claude-plugin-deceptive-description`. An honest network mention, an
   empty description, and a matching local echo helper are not that class.
   Inventory remains evidence, not permission.
+  Manifest ``NaN``, ``Infinity``, and ``-Infinity`` fail as
+  `claude-plugin-nonstandard-json-constant`. Duplicate object members stay
+  `claude-plugin-duplicate-json-member`. A finite JSON number is not that
+  class.
