@@ -7,7 +7,8 @@ package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
-request, a non-standard JSON constant, malformed UTF-8 JSON bytes, a
+request, secret copied into a prompt, log, or subprocess environment,
+a non-standard JSON constant, malformed UTF-8 JSON bytes, a
 non-NFC identity name, conflicting plugin/skill/command identity,
 undeclared vendored or generated third-party
 code, a
@@ -182,6 +183,12 @@ CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
     "credentials out of curl, wget, and fetch payloads. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
+CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE: Final = (
+    "Claude plugin hook copies a named secret into a prompt, log, or "
+    "subprocess environment. Keep credentials out of prompt files, logs, "
+    "and child process env dicts. "
+    "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
+)
 CLAUDE_PLUGIN_UNSIGNED_EXECUTABLE_DOWNLOAD_MESSAGE: Final = (
     "Claude plugin hook or package lifecycle script downloads an unsigned "
     "executable and makes it runnable. Pin and verify binaries; do not "
@@ -241,6 +248,42 @@ _SECRET_TO_NETWORK = re.compile(
     r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
     r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
     r"AWS_SECRET_ACCESS_KEY)(?![A-Za-z0-9_])(?:\})?",
+    re.IGNORECASE,
+)
+_NAMED_SECRET_NAMES: Final = (
+    r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
+    r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
+    r"AWS_SECRET_ACCESS_KEY"
+)
+_NAMED_SECRET_TOKEN = re.compile(_NAMED_SECRET_NAMES, re.IGNORECASE)
+_SECRET_REF = re.compile(
+    r"(?:\$(?:\{)?"
+    + _NAMED_SECRET_NAMES
+    + r"(?:\})?|"
+    r"os\.environ\s*\[\s*['\"](?:"
+    + _NAMED_SECRET_NAMES
+    + r")['\"]\s*\]|"
+    r"os\.environ\.get\s*\(\s*['\"](?:"
+    + _NAMED_SECRET_NAMES
+    + r")['\"]|"
+    r"os\.getenv\s*\(\s*['\"](?:"
+    + _NAMED_SECRET_NAMES
+    + r")['\"])",
+    re.IGNORECASE,
+)
+_PROMPT_LOG_SINK = re.compile(
+    r"\b(?:echo|printf|print|logging\.\w+|logger\.\w+|"
+    r"write_text|write_bytes|\.write|subprocess\.\w+)\b",
+    re.IGNORECASE,
+)
+_SECRET_LOG_IDENT = re.compile(
+    r"(?:logging|logger)\.\w+\(\s*(?:api_key|secret|token|password)\s*\)",
+    re.IGNORECASE,
+)
+_SUBPROCESS_SECRET_ENV = re.compile(
+    r"subprocess\.\w+\([^;\n]*\benv\s*=\s*\{[^}\n]*(?:"
+    + _NAMED_SECRET_NAMES
+    + r"|os\.environ\s*\[|:\s*(?:secret|api_key|token)\b)",
     re.IGNORECASE,
 )
 _PIPE_TO_INTERPRETER = re.compile(
@@ -584,6 +627,7 @@ def inspect_claude_plugin_file(
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_secret_to_network_hits(content))
+        hits.extend(_secret_to_prompt_hits(content))
     return tuple(hits)
 
 
@@ -1249,6 +1293,80 @@ def _secret_to_network_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=f"{client} ${name}"[:120],
             message=CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE,
+        ),
+    )
+
+
+def _secret_to_prompt_sink_label(line: str) -> str:
+    """Return a short sink label for a secret-to-prompt line."""
+    lowered = line.lower()
+    if re.search(r"\b(?:echo|printf)\b", lowered):
+        return "echo"
+    if re.search(r"\bprint\s*\(", lowered):
+        return "print"
+    if re.search(r"\b(?:logging|logger)\.\w+", lowered):
+        return "logger"
+    if "subprocess" in lowered:
+        return "subprocess"
+    return "prompt"
+
+
+def _secret_to_prompt_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return findings when a named secret is copied into a prompt, log, or child env.
+
+    Curl, wget, and fetch copies stay ``claude-plugin-secret-to-network``.
+    Reading a secret into a local variable is not this class. Hardcoded
+    ``sk-`` literals stay ``claude-plugin-provider-secret``. Child
+    ``env=os.environ`` inheritance is not a copy beyond inheritance.
+
+    Args:
+        content: Hook, command, or manifest text.
+
+    Returns:
+        Zero or one hit. Snippets are sink plus env name, without secret
+        values or raw bidi.
+    """
+    for match in _SECRET_REF.finditer(content):
+        line = content[content.rfind("\n", 0, match.start()) + 1 :].split("\n", 1)[0]
+        if _SECRET_TO_NETWORK.search(line) is not None:
+            continue
+        if _PROMPT_LOG_SINK.search(line) is None:
+            continue
+        name_match = _NAMED_SECRET_TOKEN.search(match.group(0))
+        name = name_match.group(0) if name_match is not None else "SECRET"
+        return (
+            PluginHit(
+                rule_id="claude-plugin-secret-to-prompt",
+                line=content[: match.start()].count("\n") + 1,
+                snippet=_sanitize_plugin_snippet(
+                    f"{_secret_to_prompt_sink_label(line)} ${name}"
+                ),
+                message=CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE,
+            ),
+        )
+    ident = _SECRET_LOG_IDENT.search(content)
+    if ident is not None:
+        return (
+            PluginHit(
+                rule_id="claude-plugin-secret-to-prompt",
+                line=content[: ident.start()].count("\n") + 1,
+                snippet="logger api_key",
+                message=CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE,
+            ),
+        )
+    env_match = _SUBPROCESS_SECRET_ENV.search(content)
+    if env_match is None:
+        return ()
+    env_name = _NAMED_SECRET_TOKEN.search(env_match.group(0))
+    snippet = (
+        f"subprocess ${env_name.group(0)}" if env_name is not None else "subprocess env"
+    )
+    return (
+        PluginHit(
+            rule_id="claude-plugin-secret-to-prompt",
+            line=content[: env_match.start()].count("\n") + 1,
+            snippet=_sanitize_plugin_snippet(snippet),
+            message=CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE,
         ),
     )
 

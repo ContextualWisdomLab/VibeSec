@@ -79,3 +79,8 @@
   `claude-plugin-conflicting-identity`. Non-NFC names stay
   `claude-plugin-inconsistent-normalized-name`. One collision emits one
   finding. Snippets are the label ``name``.
+  Named secrets copied into a prompt file, log, or subprocess ``env``
+  dict fail as `claude-plugin-secret-to-prompt`. Curl, wget, and fetch
+  copies stay `claude-plugin-secret-to-network`. Hardcoded ``sk-``
+  literals stay `claude-plugin-provider-secret`. Reading a secret into
+  a local variable is not this class. Snippets omit secret values.
