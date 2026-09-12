@@ -2333,6 +2333,15 @@ def _finding_category(rule_id: str) -> str:
             "api-key",
             "token",
             "openai",
+            "aws",
+            "private-key",
+            "anthropic",
+            "github",
+            "slack",
+            "twilio",
+            "sendgrid",
+            "npm",
+            "pypi",
         )
     ):
         return "secrets"
