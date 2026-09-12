@@ -1,4 +1,4 @@
-"""Duplicate plugin, skill, and command identities must fail closed."""
+"""Duplicate Claude plugin invocation identities must fail closed."""
 
 from __future__ import annotations
 
@@ -31,12 +31,18 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _write_skill(path: Path, name: str) -> None:
-    """Write one skill markdown file with a YAML name."""
+    """Write one skill Markdown file with a YAML display/invocation name."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"---\nname: {name}\ndescription: helper\n---\n# {name}\n",
         encoding="utf-8",
     )
+
+
+def _write_command(path: Path, body: str = "command\n") -> None:
+    """Write one legacy command whose invocation identity comes from its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
 
 
 def _licensed_plugin(root: Path, *, name: str = "safe-plugin") -> Path:
@@ -62,7 +68,7 @@ def _licensed_plugin(root: Path, *, name: str = "safe-plugin") -> Path:
 
 
 def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
-    """Two SKILL.md files that share a name conceal identity."""
+    """Two plugin skills with one effective command name collide."""
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
     _write_skill(root / "skills" / "beta" / "SKILL.md", "helper")
@@ -73,13 +79,43 @@ def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
     assert _CONFLICT_RULE in receipt.finding_summary
 
 
-def test_plugin_name_colliding_with_skill_name_fails(tmp_path: Path) -> None:
-    """A plugin identity must not reuse a skill name."""
+def test_skill_and_legacy_command_with_same_invocation_fail(tmp_path: Path) -> None:
+    """Skills and legacy command files share the plugin skill command surface."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "skills" / "alpha" / "SKILL.md", "ship")
+    _write_command(root / "commands" / "ship.md", "---\ndescription: ship helper\n---\nship\n")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE in receipt.finding_summary
+    assert receipt.scan_result == "fail"
+
+
+def test_command_frontmatter_name_does_not_mint_command_identity(tmp_path: Path) -> None:
+    """Legacy commands are invoked by path, not unsupported ``name`` metadata."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "commands" / "one.md", "ship")
+    _write_skill(root / "commands" / "two.md", "ship")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+
+def test_nested_legacy_command_paths_keep_namespace_segments(tmp_path: Path) -> None:
+    """Nested command directories are part of the effective invocation identity."""
+    root = _licensed_plugin(tmp_path)
+    _write_command(root / "commands" / "frontend" / "deploy.md")
+    _write_command(root / "commands" / "backend" / "deploy.md")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+
+def test_plugin_namespace_may_match_local_skill_name(tmp_path: Path) -> None:
+    """Plugin identity is a namespace prefix, not the local skill identity."""
     root = _licensed_plugin(tmp_path, name="helper")
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
     receipt = build_claude_plugin_scan_receipt(root)
-    assert receipt.scan_result == "fail"
-    assert _CONFLICT_RULE in receipt.finding_summary
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
 
 
 def test_marketplace_duplicate_plugin_names_are_reported() -> None:
@@ -128,16 +164,6 @@ def test_vendored_scope_owner_is_unchanged(tmp_path: Path) -> None:
     assert _CONFLICT_RULE not in rule_ids
 
 
-def test_command_markdown_name_collision_fails(tmp_path: Path) -> None:
-    """Two command files that share a frontmatter name fail closed."""
-    root = _licensed_plugin(tmp_path)
-    _write_skill(root / "commands" / "one.md", "ship")
-    _write_skill(root / "commands" / "two.md", "ship")
-    receipt = build_claude_plugin_scan_receipt(root)
-    assert _CONFLICT_RULE in receipt.finding_summary
-    assert receipt.scan_result == "fail"
-
-
 def test_marketplace_package_duplicate_names_fail(tmp_path: Path) -> None:
     """A marketplace-only tree with two same-named plugins fails closed."""
     _write_json(
@@ -154,12 +180,22 @@ def test_marketplace_package_duplicate_names_fail(tmp_path: Path) -> None:
     assert any(hit.rule_id == _CONFLICT_RULE for hit in hits)
 
 
-def test_skill_json_name_collides_with_plugin_name(tmp_path: Path) -> None:
-    """``skill.json`` uses the same identity contract as SKILL.md."""
+def test_skill_json_name_may_match_plugin_namespace(tmp_path: Path) -> None:
+    """Legacy skill metadata stays inside the plugin namespace."""
     root = _licensed_plugin(tmp_path, name="helper")
     _write_json(root / "skills" / "alpha" / "skill.json", {"name": "helper"})
     receipt = build_claude_plugin_scan_receipt(root)
-    assert _CONFLICT_RULE in receipt.finding_summary
+    assert _CONFLICT_RULE not in receipt.finding_summary
+
+
+def test_agent_name_is_separate_from_skill_invocation_name(tmp_path: Path) -> None:
+    """Agent and skill components use separate invocation surfaces."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
+    _write_skill(root / "agents" / "helper.md", "helper")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
 
 
 def test_invalid_skill_json_is_not_an_identity(tmp_path: Path) -> None:
