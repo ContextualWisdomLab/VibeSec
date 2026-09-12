@@ -94,15 +94,15 @@ def detect_language_axes(files: Iterable[str | Path]) -> set[str]:
     """Return language axes found in a scan target without requiring user flags."""
     languages: set[str] = set()
     for file_path in files:
-        if not isinstance(file_path, str):
-            name = file_path.name
-            suffix = file_path.suffix.lower()
-        else:
+        if isinstance(file_path, str):
             idx = max(file_path.rfind("/"), file_path.rfind("\\"))
             name = file_path[idx + 1 :] if idx != -1 else file_path
 
             dot_idx = name.rfind(".")
             suffix = name[dot_idx:].lower() if dot_idx > 0 else ""
+        else:
+            name = file_path.name
+            suffix = file_path.suffix.lower()
 
         language = LANGUAGE_BY_EXTENSION.get(suffix)
         if language:
@@ -122,7 +122,7 @@ def detect_stack_profile(files: Iterable[str | Path]) -> StackProfile:
     """Infer the most helpful zero-config scan profile for beginner users."""
     files_list = list(files) if not isinstance(files, (list, set, tuple)) else files
     paths = [
-        str(file_path) if isinstance(file_path, Path) else file_path
+        file_path if isinstance(file_path, str) else str(file_path)
         for file_path in files_list
     ]
     languages = detect_language_axes(paths)
@@ -219,10 +219,8 @@ def _detect_framework_markers(paths: list[str]) -> set[str]:
     for path in paths:
         idx = max(path.rfind("/"), path.rfind("\\"))
         name = path[idx + 1 :] if idx != -1 else path
-        if any(
-            component in {"templates", "views"}
-            for component in _iter_lower_path_components(path)
-        ):
+        components = set(path.lower().replace('\\', '/').split('/'))
+        if components.intersection({"templates", "views"}):
             markers.add("templates")
         if name not in MANIFEST_NAMES:
             continue
