@@ -2169,6 +2169,117 @@ def test_receipt_verification_coverage_edges(tmp_path: Path) -> None:
     assert "scan_result" in pass_on_fail.mismatches
 
 
+def test_marketplace_catalog_binding_validation_edges(tmp_path: Path) -> None:
+    """Catalog selection rejects malformed identities and binds URL/SHA aliases."""
+    from appguardrail_core import claude_plugin_detector as detector
+
+    root = _bound_identity_plugin(tmp_path)
+    entry = {
+        "name": "hook-plugin",
+        "version": "1.0.0",
+        "source": {
+            "url": "example/hook-plugin",
+            "ref": "main",
+            "sha": _PINNED_COMMIT,
+            "path": "plugin",
+        },
+    }
+    catalog = {
+        "repository": "example/catalog",
+        "commit": _PINNED_COMMIT,
+        "plugins": [entry],
+    }
+
+    selected = detector._select_marketplace_entry(catalog, root)
+    selected_source = selected["plugins"][0]["source"]
+    assert selected_source["repo"] == "example/hook-plugin"
+    assert selected_source["ref"] == _PINNED_COMMIT
+    assert detector._select_marketplace_entry(entry, root)["name"] == "hook-plugin"
+    with pytest.raises(detector._MarketplaceCatalogError):
+        detector._select_marketplace_entry(
+            {**entry, "name": "different-plugin"},
+            root,
+        )
+
+    invalid_entries: list[object] = [
+        "entry",
+        {"name": "", "source": {"repo": "r", "ref": _PINNED_COMMIT}},
+        {"name": "hook-plugin", "version": 1, "source": {}},
+        {"name": "hook-plugin", "source": "plugin"},
+        {"name": "hook-plugin", "source": {}},
+        {"name": "hook-plugin", "source": {"repo": 1, "ref": _PINNED_COMMIT}},
+        {
+            "name": "hook-plugin",
+            "source": {"repo": "r", "url": 1, "ref": _PINNED_COMMIT},
+        },
+        {"name": "hook-plugin", "source": {"repo": "r", "sha": 1}},
+        {"name": "hook-plugin", "source": {"repo": "r"}},
+        {
+            "name": "hook-plugin",
+            "source": {"repo": "r", "ref": _PINNED_COMMIT, "path": 1},
+        },
+    ]
+    for invalid in invalid_entries:
+        with pytest.raises(detector._MarketplaceCatalogError):
+            detector._normalize_marketplace_entry(invalid)
+    for invalid_catalog in (
+        None,
+        {"plugins": {}},
+        {"plugins": []},
+        {"plugins": [entry, entry]},
+    ):
+        with pytest.raises(detector._MarketplaceCatalogError):
+            detector._select_marketplace_entry(invalid_catalog, root)
+
+    assert detector._json_documents_match(catalog, catalog) is True
+    assert detector._json_documents_match({"invalid": {1}}, {}) is False
+    assert detector._receipt_catalog_identity(root, None, None)[1] is True
+    assert detector._receipt_catalog_identity(root, None, b"{")[1] is False
+    assert detector._receipt_catalog_identity(
+        root,
+        {"plugins": []},
+        None,
+    )[1] is False
+    assert detector._receipt_catalog_identity(
+        root,
+        {"plugins": []},
+        json.dumps(catalog).encode(),
+    )[1] is False
+    assert detector._catalog_identity(None)["catalog_repository"] == ""
+    assert (
+        detector._catalog_identity({"catalog_commit_sha": _PINNED_COMMIT})[
+            "catalog_commit_sha"
+        ]
+        == _PINNED_COMMIT
+    )
+    assert (
+        detector._catalog_identity({"sha": _PINNED_COMMIT})["catalog_commit_sha"]
+        == _PINNED_COMMIT
+    )
+
+    invalid_receipt = detector.build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload={"plugins": []},
+    )
+    assert invalid_receipt.scan_result == "fail"
+    assert "claude-plugin-source-mismatch" in invalid_receipt.finding_summary
+
+    hits = detector._catalog_bind_hits(
+        root,
+        {
+            "catalog_repository": "example/catalog",
+            "catalog_commit_sha": "main",
+            "plugin_name": "different",
+            "source_repository": "",
+            "source_commit_sha": "",
+        },
+    )
+    assert {hit.rule_id for hit in hits} == {
+        "claude-plugin-floating-git-ref",
+        "claude-plugin-source-mismatch",
+    }
+
+
 _GITHUB_WRITE_TOKEN_RULE = "claude-plugin-github-write-token"
 _DOCKER_SOCKET_RULE = "claude-plugin-docker-socket"
 _SECRET_TO_NETWORK_RULE = "claude-plugin-secret-to-network"
