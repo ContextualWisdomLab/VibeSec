@@ -8,7 +8,8 @@ executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, a non-standard JSON constant, malformed UTF-8 JSON bytes, a
-non-NFC identity name, undeclared vendored or generated third-party
+non-NFC identity name, conflicting plugin/skill/command identity,
+undeclared vendored or generated third-party
 code, a
 description that denies inventoried write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
@@ -82,6 +83,12 @@ CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE: Final = (
     "Claude plugin identity name is not Unicode NFC. Decode and normalize "
     "the declared name before admission so catalog and artifact identities "
     "compare as one object. "
+    "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
+)
+CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE: Final = (
+    "Claude plugin package declares the same identity name more than once "
+    "inside one plugin, skill, command, or agent namespace. Duplicate names "
+    "conceal which surface is admitted. "
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
@@ -708,6 +715,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     hits.extend(_archive_traversal_hits(root))
     hits.extend(_unadmitted_submodule_hits(root))
     hits.extend(_vendored_scope_hits(root, payload))
+    hits.extend(_conflicting_identity_hits(root, payload))
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -1348,6 +1356,7 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
             )
     hits.extend(_mcp_hits(payload, content))
     hits.extend(_normalized_name_hits(payload, content))
+    hits.extend(_conflicting_entry_name_hits(payload, content))
     secret = _PROVIDER_SECRET.search(content)
     if secret is not None:
         hits.append(
@@ -1476,6 +1485,141 @@ def _normalized_name_hits(payload: object, content: str) -> tuple[PluginHit, ...
             )
         )
     return tuple(hits)
+
+
+def _nfc_identity_name(value: object) -> str | None:
+    """Return an NFC identity name, or ``None`` when absent or not NFC."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = unicodedata.normalize("NFC", value)
+    if normalized != value:
+        return None
+    return normalized
+
+
+def _conflict_identity_hit() -> PluginHit:
+    """Return the single conflicting-identity finding with a label snippet."""
+    return PluginHit(
+        rule_id="claude-plugin-conflicting-identity",
+        line=1,
+        snippet="name",
+        message=CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE,
+    )
+
+
+def _conflicting_entry_name_hits(
+    payload: object, content: str
+) -> tuple[PluginHit, ...]:
+    """Return a hit when one marketplace document repeats an NFC name."""
+    seen: set[str] = set()
+    for entry in _plugin_entries(payload):
+        name = _nfc_identity_name(entry.get("name"))
+        if name is None:
+            continue
+        if name in seen:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-conflicting-identity",
+                    line=_line_of(content, name),
+                    snippet="name",
+                    message=CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE,
+                ),
+            )
+        seen.add(name)
+    return ()
+
+
+def _conflicting_identity_hits(
+    root: Path, payload: object
+) -> tuple[PluginHit, ...]:
+    """Return one hit when an identity namespace repeats an NFC name.
+
+    Non-NFC names stay the normalized-name class. Vendored trees are skipped.
+    Duplicate names emit one finding, not one per file.
+
+    Args:
+        root: Materialized plugin tree.
+        payload: Parsed plugin or marketplace JSON.
+
+    Returns:
+        Zero or one conflicting-identity hit.
+    """
+    seen_by_namespace: dict[str, set[str]] = {"plugin": set()}
+    for entry in _plugin_entries(payload):
+        name = _nfc_identity_name(entry.get("name"))
+        if name is None:
+            continue
+        if name in seen_by_namespace["plugin"]:
+            return (_conflict_identity_hit(),)
+        seen_by_namespace["plugin"].add(name)
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if _is_vendored_scope_relative(relative):
+            continue
+        identity = _identity_from_path(path, relative)
+        if identity is None:
+            continue
+        namespace, name = identity
+        seen = seen_by_namespace.setdefault(namespace, set())
+        if name in seen:
+            return (_conflict_identity_hit(),)
+        seen.add(name)
+    return ()
+
+
+def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
+    """Return the namespace and NFC name declared by a local identity file."""
+    posix = f"/{relative.replace(chr(92), '/')}/"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if relative.startswith("commands/") and path.suffix.lower() == ".md":
+        command_path = relative[len("commands/") : -len(path.suffix)]
+        name = _nfc_identity_name(command_path.replace("/", ":"))
+        return ("skill", name) if name is not None else None
+    if path.name == "skill.json":
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        name = _nfc_identity_name(payload.get("name"))
+        return ("skill", name) if name is not None else None
+    markdown = path.name.lower().endswith(".md") and any(
+        marker in posix for marker in ("/skills/", "/commands/", "/agents/")
+    )
+    if _is_skill_surface(path) or markdown:
+        text, _line = _markdown_name(content)
+        name = _nfc_identity_name(text)
+        if name is None:
+            return None
+        if "/agents/" in posix:
+            return "agent", name
+        return "skill", name
+    return None
+
+
+def _markdown_name(content: str) -> tuple[str, int]:
+    """Return the YAML frontmatter name and its 1-based line."""
+    match = _FRONTMATTER.match(content)
+    if match is None:
+        return "", 0
+    body = match.group("body")
+    start_line = content[: match.start("body")].count("\n") + 1
+    for offset, line in enumerate(body.splitlines()):
+        if not line.lower().startswith("name:"):
+            continue
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if value in {"|", ">", "|-", "|+", ">-", ">+"}:
+            return "", start_line + offset
+        return value, start_line + offset
+    return "", 0
 
 
 def _plugin_entries(payload: object) -> Iterable[dict]:

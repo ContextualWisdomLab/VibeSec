@@ -75,3 +75,7 @@
   those copies stays inventory. Generated files listed in plugin.json
   `files[]` are declared scope. Vendored trees emit one scope finding,
   not per-file hook findings.
+  Duplicate plugin, skill, or command NFC names fail as
+  `claude-plugin-conflicting-identity`. Non-NFC names stay
+  `claude-plugin-inconsistent-normalized-name`. One collision emits one
+  finding. Snippets are the label ``name``.
