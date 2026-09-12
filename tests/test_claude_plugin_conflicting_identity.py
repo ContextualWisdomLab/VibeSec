@@ -1,4 +1,4 @@
-"""Duplicate plugin, skill, and command identities must fail closed."""
+"""Duplicate Claude plugin invocation identities must fail closed."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _write_skill(path: Path, name: str) -> None:
-    """Write one skill markdown file with a YAML name."""
+    """Write one skill Markdown file with a YAML display/invocation name."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"---\nname: {name}\ndescription: helper\n---\n# {name}\n",
@@ -62,7 +62,7 @@ def _licensed_plugin(root: Path, *, name: str = "safe-plugin") -> Path:
 
 
 def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
-    """Two SKILL.md files that share a name conceal one invocation identity."""
+    """Two plugin skills with one effective command name collide."""
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "helper")
     _write_skill(root / "skills" / "beta" / "SKILL.md", "helper")
@@ -71,6 +71,28 @@ def test_two_skills_with_the_same_name_fail_admission(tmp_path: Path) -> None:
     assert any(hit.rule_id == _CONFLICT_RULE for hit in hits)
     assert receipt.scan_result == "fail"
     assert _CONFLICT_RULE in receipt.finding_summary
+
+
+def test_skill_and_legacy_command_with_same_invocation_fail(tmp_path: Path) -> None:
+    """Skills and legacy command files share the plugin skill command surface."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "skills" / "alpha" / "SKILL.md", "ship")
+    command = root / "commands" / "ship.md"
+    command.parent.mkdir(parents=True)
+    command.write_text("---\ndescription: ship helper\n---\nship\n", encoding="utf-8")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE in receipt.finding_summary
+    assert receipt.scan_result == "fail"
+
+
+def test_command_frontmatter_name_does_not_mint_command_identity(tmp_path: Path) -> None:
+    """Legacy commands are invoked by path, not unsupported ``name`` metadata."""
+    root = _licensed_plugin(tmp_path)
+    _write_skill(root / "commands" / "one.md", "ship")
+    _write_skill(root / "commands" / "two.md", "ship")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
 
 
 def test_plugin_namespace_may_match_local_skill_name(tmp_path: Path) -> None:
@@ -126,16 +148,6 @@ def test_vendored_scope_owner_is_unchanged(tmp_path: Path) -> None:
     rule_ids = {hit.rule_id for hit in scan_claude_plugin_package(root)}
     assert _SCOPE_RULE in rule_ids
     assert _CONFLICT_RULE not in rule_ids
-
-
-def test_command_markdown_name_collision_fails(tmp_path: Path) -> None:
-    """Two legacy command files sharing one local skill name fail closed."""
-    root = _licensed_plugin(tmp_path)
-    _write_skill(root / "commands" / "one.md", "ship")
-    _write_skill(root / "commands" / "two.md", "ship")
-    receipt = build_claude_plugin_scan_receipt(root)
-    assert _CONFLICT_RULE in receipt.finding_summary
-    assert receipt.scan_result == "fail"
 
 
 def test_marketplace_package_duplicate_names_fail(tmp_path: Path) -> None:
