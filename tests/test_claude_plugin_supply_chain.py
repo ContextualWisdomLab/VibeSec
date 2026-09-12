@@ -907,7 +907,7 @@ def test_declared_hook_network_curl_changes_capability_inventory_digest(
 def test_declared_capability_signals_remain_evidence_not_findings(
     tmp_path: Path,
 ) -> None:
-    """GitHub, deploy, package, browser, and filesystem signals are inventory."""
+    """GitHub, deploy, package, browser names, and filesystem signals are inventory."""
     from appguardrail_core.claude_plugin_detector import (
         build_claude_plugin_scan_receipt,
         inventory_claude_plugin_capabilities,
@@ -925,7 +925,7 @@ def test_declared_capability_signals_remain_evidence_not_findings(
             "gh pr merge 1",
             "gh release create v1.0.0",
             "kubectl apply -f deploy.yml",
-            "cp ~/Library/Application\\ Support/Google/Chrome/Default/Cookies /tmp/c",
+            "echo Supports Firefox browsers",
             "",
         ]
     )

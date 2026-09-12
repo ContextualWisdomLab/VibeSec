@@ -6,7 +6,8 @@ unsigned executable download, package.json lifecycle download, unpinned
 package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
-socket bind, secret copied into a network request, or a released
+socket bind, host browser-profile store, secret copied into a network
+request, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission: presence of a capability is not a finding by itself. Skill
@@ -134,6 +135,12 @@ CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "control, not an image push. Remove the socket bind and keep builds "
     "isolated. [CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_BROWSER_PROFILE_MESSAGE: Final = (
+    "Claude plugin hook or manifest reaches a host browser profile store. "
+    "Cookie and login databases are credential access, not a supported "
+    "browser. Remove the profile path. "
+    "[CWE-219 - Sensitive Information in Browser's History/Cache/Cookies]"
+)
 CLAUDE_PLUGIN_SECRET_TO_NETWORK_MESSAGE: Final = (
     "Claude plugin hook copies a named secret into a network request. Keep "
     "credentials out of curl, wget, and fetch payloads. "
@@ -176,6 +183,13 @@ _GITHUB_TOKEN = re.compile(
 )
 _DOCKER_SOCKET = re.compile(
     r"(?:/var/run/docker\.sock|unix://\S*docker\.sock)",
+    re.IGNORECASE,
+)
+_BROWSER_PROFILE = re.compile(
+    r"(?:Google/Chrome|Chromium/User Data|"
+    r"%LOCALAPPDATA%\\Google\\Chrome|"
+    r"Library/Application Support/(?:Google/Chrome|Chromium)|"
+    r"\.mozilla/firefox|cookies\.sqlite|Login Data)",
     re.IGNORECASE,
 )
 _SECRET_TO_NETWORK = re.compile(
@@ -494,6 +508,7 @@ def inspect_claude_plugin_file(
     if manifest or hook_surface:
         hits.extend(_github_write_token_hits(content))
         hits.extend(_docker_socket_hits(content))
+        hits.extend(_browser_profile_hits(content))
         hits.extend(_secret_to_network_hits(content))
     return tuple(hits)
 
@@ -1035,6 +1050,31 @@ def _docker_socket_hits(content: str) -> tuple[PluginHit, ...]:
             line=content[: match.start()].count("\n") + 1,
             snippet=match.group(0)[:120],
             message=CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE,
+        ),
+    )
+
+
+def _browser_profile_hits(content: str) -> tuple[PluginHit, ...]:
+    """Return host browser-profile store findings from hook or manifest text.
+
+    Path-like Chrome, Chromium, and Firefox profile stores fail closed.
+    A bare product name such as ``Firefox`` is inventory, not this finding.
+
+    Args:
+        content: Hook or manifest text.
+
+    Returns:
+        Zero or one hit. Snippets omit secret literals and raw bidi.
+    """
+    match = _BROWSER_PROFILE.search(content)
+    if match is None:
+        return ()
+    return (
+        PluginHit(
+            rule_id="claude-plugin-browser-profile-access",
+            line=content[: match.start()].count("\n") + 1,
+            snippet=_sanitize_plugin_snippet(match.group(0))[:120],
+            message=CLAUDE_PLUGIN_BROWSER_PROFILE_MESSAGE,
         ),
     )
 
