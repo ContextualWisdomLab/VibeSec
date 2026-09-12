@@ -65,3 +65,7 @@
   fail as `claude-plugin-malformed-utf8`. Valid CJK stays admitted. Bidi
   and control concealment stay `claude-plugin-concealed-identity`.
   Snippets are short labels and omit raw invalid bytes.
+  Plugin or marketplace identity names that are not Unicode NFC fail as
+  `claude-plugin-inconsistent-normalized-name`. Precomposed Latin and
+  Hangul names stay admitted. Combining-mark bytes do not appear in
+  snippets.

@@ -8,6 +8,7 @@ executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
 request, a non-standard JSON constant, malformed UTF-8 JSON bytes, a
+non-NFC identity name, a
 description that denies inventoried write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
@@ -29,6 +30,7 @@ from pathlib import Path
 import re
 import tarfile
 from typing import Final, Iterable
+import unicodedata
 import zipfile
 
 from .claude_plugin_sarif import finding_summary_to_sarif, sarif_document_sha256
@@ -74,6 +76,12 @@ CLAUDE_PLUGIN_NONSTANDARD_JSON_MESSAGE: Final = (
     "Claude plugin manifest contains a non-standard JSON constant. NaN, "
     "Infinity, and -Infinity are not JSON numbers and must fail admission. "
     "[CWE-20 - Improper Input Validation]"
+)
+CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE: Final = (
+    "Claude plugin identity name is not Unicode NFC. Decode and normalize "
+    "the declared name before admission so catalog and artifact identities "
+    "compare as one object. "
+    "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
     "Claude plugin manifest is not valid UTF-8. Truncated multibyte "
@@ -1322,6 +1330,7 @@ def _inspect_manifest(content: str) -> tuple[PluginHit, ...]:
                 )
             )
     hits.extend(_mcp_hits(payload, content))
+    hits.extend(_normalized_name_hits(payload, content))
     secret = _PROVIDER_SECRET.search(content)
     if secret is not None:
         hits.append(
@@ -1416,6 +1425,37 @@ def _mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                 line=_line_of(content, token),
                 snippet=token[:120],
                 message=CLAUDE_PLUGIN_UNBOUNDED_MCP_MESSAGE,
+            )
+        )
+    return tuple(hits)
+
+
+def _normalized_name_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
+    """Return hits when a plugin identity name is not Unicode NFC.
+
+    Combining-mark (NFD) names conceal catalog identity. ASCII and
+    precomposed Hangul/Latin names are already NFC and stay negative.
+
+    Args:
+        payload: Parsed plugin or marketplace JSON.
+        content: Original manifest text for line numbers.
+
+    Returns:
+        Zero or more hits. Snippets are the label ``name`` only.
+    """
+    hits: list[PluginHit] = []
+    for entry in _plugin_entries(payload):
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if unicodedata.normalize("NFC", name) == name:
+            continue
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-inconsistent-normalized-name",
+                line=_line_of(content, name),
+                snippet="name",
+                message=CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE,
             )
         )
     return tuple(hits)
