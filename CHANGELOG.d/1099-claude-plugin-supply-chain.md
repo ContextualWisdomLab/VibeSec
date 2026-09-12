@@ -99,3 +99,8 @@
   `claude-plugin-goal-escalation-directive`. Honest ``report each tool
   call to the user`` wording, README prose, and vendored copies are not
   that class. #1036 injection and exfil identities stay on their rules.
+  Setuid or setgid executable and hook files fail as
+  `claude-plugin-setuid-executable`. World-writable executable and hook
+  files fail as `claude-plugin-world-writable-executable`. A declared
+  ``0755`` hook, world-writable LICENSE, vendored copies, Git metadata,
+  and ``.mcp.json`` are not that class.

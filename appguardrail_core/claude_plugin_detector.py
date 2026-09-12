@@ -21,7 +21,8 @@ not permission: presence of a capability is not a finding by itself. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
-instruction-override family. A lockfile-backed package.json without a
+instruction-override family. Setuid, setgid, or world-writable executable
+and hook files fail admission. A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
 not hook scans.
 """
@@ -35,6 +36,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tarfile
 from typing import Final, Iterable
 import unicodedata
@@ -141,6 +143,16 @@ CLAUDE_PLUGIN_OVERSIZED_PACKAGE_MESSAGE: Final = (
     "Claude plugin package exceeds the bounded file count or scanned byte "
     "budget. Hostile oversized trees fail admission. "
     "[CWE-400 - Uncontrolled Resource Consumption]"
+)
+CLAUDE_PLUGIN_SETUID_EXECUTABLE_MESSAGE: Final = (
+    "Claude plugin executable or hook has the setuid or setgid bit. "
+    "Privilege-elevating modes fail admission. "
+    "[CWE-732 - Incorrect Permission Assignment for Critical Resource]"
+)
+CLAUDE_PLUGIN_WORLD_WRITABLE_EXECUTABLE_MESSAGE: Final = (
+    "Claude plugin executable or hook is world-writable. Tamperable host "
+    "modes fail admission. "
+    "[CWE-732 - Incorrect Permission Assignment for Critical Resource]"
 )
 CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE: Final = (
     "Claude plugin marketplace identity does not match the retrieved artifact "
@@ -767,11 +779,12 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         Undeclared executable, hidden undeclared executable or config,
         undeclared vendored or generated scope, license absence or SPDX
         mismatch, size, symlink, archive traversal, unadmitted-submodule,
-        and deceptive description findings. Empty when the tree is not a
-        plugin package or every hook is a declared regular file. Inventory
-        presence is not a finding. An empty description is not this class.
-        Git metadata is not a plugin executable surface. ``.mcp.json``
-        stays the MCP class. Vendored trees are one scope finding.
+        setuid or world-writable executable modes, and deceptive
+        description findings. Empty when the tree is not a plugin package
+        or every hook is a declared regular file. Inventory presence is
+        not a finding. An empty description is not this class. Git
+        metadata is not a plugin executable surface. ``.mcp.json`` stays
+        the MCP class. Vendored trees are one scope finding.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -851,6 +864,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
                 )
             )
     hits.extend(_hidden_undeclared_executable_hits(root, declared))
+    hits.extend(_insecure_file_mode_hits(root))
     hits.extend(_deceptive_description_hits(root))
     return tuple(hits)
 
@@ -2141,6 +2155,71 @@ def _hidden_undeclared_executable_hits(
                 file=relative,
             )
         )
+    return tuple(hits)
+
+
+def _is_mode_sensitive_surface(path: Path, relative: str) -> bool:
+    """Return whether ``relative`` is an executable or hook host-fs surface.
+
+    LICENSE, README, and other documentation without an executable suffix
+    are not this class. MCP manifests stay the MCP class.
+    """
+    if path.name in _MCP_FILENAMES or _is_git_metadata_path(relative):
+        return False
+    posix = relative.replace("\\", "/")
+    first = posix.split("/", 1)[0]
+    suffix = path.suffix.lower()
+    if first in _HOOK_DIRS:
+        return True
+    return suffix in _EXECUTABLE_SUFFIXES
+
+
+def _insecure_file_mode_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return findings for setuid, setgid, or world-writable hook files.
+
+    Args:
+        root: Materialized plugin tree.
+
+    Returns:
+        Hits for executable or hook files whose mode has setuid, setgid,
+        or other-write. Empty when every such file is ``0755``/``0644``,
+        vendored, a symlink, or Git metadata. LICENSE world-write is not
+        this class. Snippets are path labels.
+    """
+    hits: list[PluginHit] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if _is_vendored_scope_relative(relative):
+            continue
+        if not _is_mode_sensitive_surface(path, relative):
+            continue
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError:
+            continue
+        snippet = _sanitize_path_snippet(path.name)
+        if mode & (stat.S_ISUID | stat.S_ISGID):
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-setuid-executable",
+                    line=1,
+                    snippet=snippet,
+                    message=CLAUDE_PLUGIN_SETUID_EXECUTABLE_MESSAGE,
+                    file=relative,
+                )
+            )
+        if mode & stat.S_IWOTH:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-world-writable-executable",
+                    line=1,
+                    snippet=snippet,
+                    message=CLAUDE_PLUGIN_WORLD_WRITABLE_EXECUTABLE_MESSAGE,
+                    file=relative,
+                )
+            )
     return tuple(hits)
 
 

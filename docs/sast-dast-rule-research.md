@@ -85,7 +85,8 @@ files being scanned, then applies the union of relevant checks. Examples:
   undeclared executables, undeclared vendored or generated code scope,
   reused #1036 skill-supply-chain identities on
   plugin skill/agent/command surfaces, hide-actions / self-modify /
-  goal-escalation instruction wording on those surfaces, and fail-closed
+  goal-escalation instruction wording on those surfaces, setuid/setgid or
+  world-writable executable and hook modes, and fail-closed
   replay of a stale or mismatched scan receipt.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).

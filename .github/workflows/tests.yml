@@ -69,7 +69,8 @@ jobs:
             --test tests/test_claude_plugin_secret_to_prompt.py \
             --test tests/test_claude_plugin_secret_to_mcp.py \
             --test tests/test_claude_plugin_command_skill_reuse.py \
-            --test tests/test_claude_plugin_hide_actions.py
+            --test tests/test_claude_plugin_hide_actions.py \
+            --test tests/test_claude_plugin_insecure_file_mode.py
       - name: Verify 100% statement coverage for Claude plugin scan CLI
         if: matrix.python-version == '3.13'
         run: |
