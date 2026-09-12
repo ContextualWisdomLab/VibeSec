@@ -907,7 +907,11 @@ def test_declared_hook_network_curl_changes_capability_inventory_digest(
 def test_declared_capability_signals_remain_evidence_not_findings(
     tmp_path: Path,
 ) -> None:
-    """GitHub, deploy, package, browser names, and filesystem signals are inventory."""
+    """GitHub, deploy, package, browser names, and filesystem signals stay inventory.
+
+    Merge and release CLI write verbs on the same hook fail closed as
+    command findings. Issue create, PR review, and kubectl apply do not.
+    """
     from appguardrail_core.claude_plugin_detector import (
         build_claude_plugin_scan_receipt,
         inventory_claude_plugin_capabilities,
@@ -943,8 +947,10 @@ def test_declared_capability_signals_remain_evidence_not_findings(
     assert inventory["github_release"] is True
     assert inventory["deployment_write"] is True
     assert inventory["browser_profile_access"] is True
-    assert receipt.scan_result == "pass"
-    assert receipt.finding_summary == ()
+    assert receipt.scan_result == "fail"
+    assert "claude-plugin-github-merge-command" in receipt.finding_summary
+    assert "claude-plugin-github-release-command" in receipt.finding_summary
+    assert "claude-plugin-github-write-token" not in receipt.finding_summary
     assert receipt.capability_inventory_sha256 == _inventory_digest(inventory)
 
 

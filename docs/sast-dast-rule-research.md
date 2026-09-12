@@ -76,8 +76,9 @@ files being scanned, then applies the union of relevant checks. Examples:
 - `java-jwt-none-algorithm`: JWT none algorithm marker.
 - `java-objectinputstream-deserialization`: direct Java native deserialization
   entry point, CWE-502.
-- `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-200/CWE-451/CWE-693 plugin
-  marketplace provenance, provider secrets, GitHub write tokens, Docker
+- `claude-plugin-*`: CWE-494/CWE-798/CWE-829/CWE-250/CWE-269/CWE-200/CWE-451/CWE-693 plugin
+  marketplace provenance, provider secrets, GitHub write tokens, GitHub merge
+  and release CLI commands, Docker
   socket binds, secret-to-network flows, secret-to-prompt and secret-to-log
   copies, pipe-to-shell installers,
   unsigned executable downloads including package.json lifecycle scripts,
@@ -92,7 +93,11 @@ files being scanned, then applies the union of relevant checks. Examples:
   for the exact AppGuardrail release and scan-policy bytes, plus
   `sbom_sha256` of a deterministic CycloneDX 1.5 dependency document, and
   `claude-plugin-checksum-mismatch` when a first-party checksum file
-  disagrees with artifact bytes on disk.
+  disagrees with artifact bytes on disk, `claude-plugin-github-merge-command`
+  for hook or manifest ``gh pr merge``, and
+  `claude-plugin-github-release-command` for ``gh release``
+  create/upload/delete/edit. ``gh issue create``, ``gh pr review``, and
+  ``docker push`` stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
