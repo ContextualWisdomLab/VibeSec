@@ -1,5 +1,6 @@
 """Tests for SARIF 2.1.0 output (appguardrail_core.sarif)."""
 
+import appguardrail_core.sarif as sarif_module
 from appguardrail_core.sarif import findings_to_sarif
 
 FINDINGS = [
@@ -72,3 +73,36 @@ def test_empty_findings_valid():
     run = findings_to_sarif([])["runs"][0]
     assert run["results"] == []
     assert run["tool"]["driver"]["rules"] == []
+
+
+def test_rule_index_lookup_does_not_scan_prior_rules(monkeypatch):
+    class CountingRuleId(str):
+        comparisons = 0
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            type(self).comparisons += 1
+            return super().__eq__(other)
+
+    normalized = tuple(
+        {
+            "severity": "INFO",
+            "rule_id": CountingRuleId(f"rule-{index}"),
+            "message": "finding",
+            "file": f"src/{index}.py",
+            "line": 1,
+            "category": "misconfig",
+            "context": "test",
+            "references": (),
+            "cwe": (),
+            "owasp": (),
+            "remediation": "",
+        }
+        for index in range(200)
+    )
+    monkeypatch.setattr(sarif_module, "normalize_findings", lambda _findings: normalized)
+
+    run = sarif_module.findings_to_sarif(())["runs"][0]
+
+    assert [result["ruleIndex"] for result in run["results"]] == list(range(200))
+    assert CountingRuleId.comparisons < 1_000
