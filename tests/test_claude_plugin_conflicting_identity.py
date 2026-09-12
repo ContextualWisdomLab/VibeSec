@@ -39,6 +39,12 @@ def _write_skill(path: Path, name: str) -> None:
     )
 
 
+def _write_command(path: Path, body: str = "command\n") -> None:
+    """Write one legacy command whose invocation identity comes from its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
 def _licensed_plugin(root: Path, *, name: str = "safe-plugin") -> Path:
     """Write a pinned licensed plugin with one declared shell hook."""
     _write_json(
@@ -77,9 +83,7 @@ def test_skill_and_legacy_command_with_same_invocation_fail(tmp_path: Path) -> N
     """Skills and legacy command files share the plugin skill command surface."""
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "skills" / "alpha" / "SKILL.md", "ship")
-    command = root / "commands" / "ship.md"
-    command.parent.mkdir(parents=True)
-    command.write_text("---\ndescription: ship helper\n---\nship\n", encoding="utf-8")
+    _write_command(root / "commands" / "ship.md", "---\ndescription: ship helper\n---\nship\n")
     receipt = build_claude_plugin_scan_receipt(root)
     assert _CONFLICT_RULE in receipt.finding_summary
     assert receipt.scan_result == "fail"
@@ -90,6 +94,16 @@ def test_command_frontmatter_name_does_not_mint_command_identity(tmp_path: Path)
     root = _licensed_plugin(tmp_path)
     _write_skill(root / "commands" / "one.md", "ship")
     _write_skill(root / "commands" / "two.md", "ship")
+    receipt = build_claude_plugin_scan_receipt(root)
+    assert _CONFLICT_RULE not in receipt.finding_summary
+    assert receipt.scan_result == "pass"
+
+
+def test_nested_legacy_command_paths_keep_namespace_segments(tmp_path: Path) -> None:
+    """Nested command directories are part of the effective invocation identity."""
+    root = _licensed_plugin(tmp_path)
+    _write_command(root / "commands" / "frontend" / "deploy.md")
+    _write_command(root / "commands" / "backend" / "deploy.md")
     receipt = build_claude_plugin_scan_receipt(root)
     assert _CONFLICT_RULE not in receipt.finding_summary
     assert receipt.scan_result == "pass"
