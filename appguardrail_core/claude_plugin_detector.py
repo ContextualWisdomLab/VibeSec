@@ -9,7 +9,8 @@ escape, decompression bomb or nested-archive depth, unadmitted nested
 submodule, hardcoded GitHub write token, GitHub merge or release CLI command, Docker
 socket bind, host browser-profile store, host cookie or token store,
 secret copied into a network request, secret copied into a prompt, log,
-or subprocess environment, secret copied into MCP env or args,
+or subprocess environment,
+secret copied into MCP env, args, command, URL, or headers,
 a non-standard JSON constant, malformed UTF-8 JSON bytes, a
 non-NFC identity name, conflicting plugin/skill/command identity,
 undeclared vendored or generated third-party
@@ -67,6 +68,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import tarfile
 from typing import Final, Iterable
@@ -124,9 +126,9 @@ CLAUDE_PLUGIN_NORMALIZED_NAME_MESSAGE: Final = (
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_CONFLICTING_IDENTITY_MESSAGE: Final = (
-    "Claude plugin package declares the same identity name on more than one "
-    "plugin, skill, or command surface. Duplicate names conceal which "
-    "surface is admitted. "
+    "Claude plugin package declares the same identity name more than once "
+    "inside one plugin, skill, command, or agent namespace. Duplicate names "
+    "conceal which surface is admitted. "
     "[CWE-451 - User Interface (UI) Misrepresentation of Critical Information]"
 )
 CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
@@ -297,8 +299,8 @@ CLAUDE_PLUGIN_SECRET_TO_PROMPT_MESSAGE: Final = (
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
 CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE: Final = (
-    "Claude plugin copies a named secret into an MCP server env, args, or "
-    "command. Keep credentials out of MCP declarations. "
+    "Claude plugin copies a named secret into an MCP server env, args, "
+    "command, URL, or header. Keep credentials out of MCP declarations. "
     "[CWE-200 - Exposure of Sensitive Information to an Unauthorized Actor]"
 )
 CLAUDE_PLUGIN_HIDE_ACTIONS_MESSAGE: Final = (
@@ -370,22 +372,51 @@ _PIPE_TO_SHELL = re.compile(
 _GITHUB_TOKEN = re.compile(
     r"\b(?P<prefix>ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}\b"
 )
-_GITHUB_MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b", re.IGNORECASE)
+_GITHUB_MERGE_COMMAND = re.compile(
+    r"\bgh\s+pr\s+merge(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _GITHUB_RELEASE_COMMAND = re.compile(
-    r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)\b",
+    r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)"
+    r"(?=$|[\s;&|()<>])",
     re.IGNORECASE,
 )
-_KUBECTL_APPLY_COMMAND = re.compile(r"\bkubectl\s+apply\b", re.IGNORECASE)
+_KUBECTL_APPLY_COMMAND = re.compile(
+    r"\bkubectl\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _DOCKER_PUSH_COMMAND = re.compile(
-    r"\bdocker(?:\s+image)?\s+push\b",
+    r"\bdocker(?:\s+image)?\s+push(?=$|[\s;&|()<>])",
     re.IGNORECASE,
 )
-_TERRAFORM_APPLY_COMMAND = re.compile(r"\bterraform\s+apply\b", re.IGNORECASE)
-_HELM_INSTALL_COMMAND = re.compile(r"\bhelm\s+install\b", re.IGNORECASE)
+_TERRAFORM_APPLY_COMMAND = re.compile(
+    r"\bterraform\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
+_HELM_INSTALL_COMMAND = re.compile(
+    r"\bhelm\s+install(?=$|[\s;&|()<>])", re.IGNORECASE
+)
 _VERCEL_DEPLOY_COMMAND = re.compile(r"\bvercel\s+deploy\b", re.IGNORECASE)
 _FLY_DEPLOY_COMMAND = re.compile(r"\b(?:fly|flyctl)\s+deploy\b", re.IGNORECASE)
-_REPORTING_BUILTINS: Final = frozenset({"echo", "printf", "print"})
-_FIRST_SHELL_TOKEN = re.compile(r"\s*([A-Za-z0-9_./+-]+)")
+_REPORTING_BUILTINS: Final = frozenset(
+    {":", "echo", "false", "print", "printf", "true"}
+)
+_SHELL_COMMAND_INTERPRETERS: Final = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
+_SHELL_NO_VALUE_SHORT_OPTIONS: Final = frozenset("efilsuvx")
+_BASH_NO_VALUE_SHORT_OPTIONS: Final = frozenset("abhkmprtBCEHPT")
+_BASH_NO_VALUE_LONG_OPTIONS: Final = frozenset(
+    {
+        "--debug",
+        "--debugger",
+        "--login",
+        "--noediting",
+        "--noprofile",
+        "--norc",
+        "--posix",
+        "--pretty-print",
+        "--restricted",
+        "--verbose",
+    }
+)
+_SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_FIRST_SHELL_TOKEN = re.compile(r"\s*(:|[A-Za-z0-9_./+-]+)")
 _LITERAL_HEREDOC_OPEN = re.compile(
     r"<<(?P<strip>-)?[ \t]*(?P<quote>['\"]?)"
     r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)"
@@ -440,7 +471,7 @@ _SECRET_TO_NETWORK = re.compile(
     r"(?:curl|wget|fetch)\b[^\n]*\$(?:\{)?(?P<name>"
     r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
     r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
-    r"AWS_SECRET_ACCESS_KEY)(?:\})?",
+    r"AWS_SECRET_ACCESS_KEY)(?![A-Za-z0-9_])(?:\})?",
     re.IGNORECASE,
 )
 _NAMED_SECRET_NAMES: Final = (
@@ -450,9 +481,12 @@ _NAMED_SECRET_NAMES: Final = (
 )
 _NAMED_SECRET_TOKEN = re.compile(_NAMED_SECRET_NAMES, re.IGNORECASE)
 _SECRET_REF = re.compile(
-    r"(?:\$(?:\{)?"
+    r"(?:\$(?:"
     + _NAMED_SECRET_NAMES
-    + r"(?:\})?|"
+    + r")(?![A-Za-z0-9_])|"
+    r"\$\{(?:"
+    + _NAMED_SECRET_NAMES
+    + r")(?:\:-[^}]*)?\}|"
     r"os\.environ\s*\[\s*['\"](?:"
     + _NAMED_SECRET_NAMES
     + r")['\"]\s*\]|"
@@ -873,10 +907,10 @@ def inspect_claude_plugin_file(
         hits.extend(_package_lifecycle_hits(content))
     if manifest or hook_surface:
         hits.extend(_github_write_token_hits(content))
-        hits.extend(_github_merge_command_hits(content))
-        hits.extend(_github_release_command_hits(content))
-        hits.extend(_kubectl_apply_command_hits(content))
-        hits.extend(_docker_push_command_hits(content))
+        hits.extend(_github_merge_command_hits(content, manifest=manifest))
+        hits.extend(_github_release_command_hits(content, manifest=manifest))
+        hits.extend(_kubectl_apply_command_hits(content, manifest=manifest))
+        hits.extend(_docker_push_command_hits(content, manifest=manifest))
         hits.extend(_terraform_apply_command_hits(content, manifest=manifest))
         hits.extend(_helm_install_command_hits(content, manifest=manifest))
         hits.extend(_vercel_deploy_command_hits(content, manifest=manifest))
@@ -1127,7 +1161,13 @@ def build_claude_plugin_scan_receipt(
         SBOM parsers, not a second policy digest.
     """
     hits = list(_collect_plugin_hits(root))
-    catalog = _catalog_identity(catalog_payload)
+    catalog, catalog_is_valid = _receipt_catalog_identity(
+        root,
+        catalog_payload,
+        catalog_bytes,
+    )
+    if not catalog_is_valid:
+        hits.append(_invalid_catalog_hit())
     hits.extend(_catalog_bind_hits(root, catalog))
     finding_summary = tuple(sorted({hit.rule_id for hit in hits}))
     identity = _plugin_identity(root)
@@ -1504,98 +1544,186 @@ def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
-def _github_merge_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``gh pr merge`` findings with a command label, not tokens.
+def _github_merge_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub merge findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and folded[:2] == ("pr", "merge")
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-merge-command",
+                        line=line,
+                        snippet="gh pr merge",
+                        message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
-    Args:
-        content: Hook or manifest text.
+def _github_release_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub release findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and len(folded) >= 2
+                and folded[0] == "release"
+                and folded[1] in {"create", "upload", "delete", "edit"}
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-release-command",
+                        line=line,
+                        snippet=f"gh release {folded[1]}",
+                        message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
-    Returns:
-        One hit when the merge CLI is present. Empty when the text only
-        lists, views, or reviews pull requests.
-    """
-    match = _GITHUB_MERGE_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-github-merge-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="gh pr merge",
-            message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
-        ),
-    )
+def _kubectl_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable kubectl apply findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        line = _manifest_argv_command_line(
+            content, executable="kubectl", verb="apply"
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=line,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
-
-def _github_release_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return GitHub CLI release write-verb findings without secret bodies.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for ``create``, ``upload``, ``delete``, or ``edit``.
-        ``gh release list`` and ``gh release view`` are not this class.
-    """
-    match = _GITHUB_RELEASE_COMMAND.search(content)
-    if match is None:
-        return ()
-    verb = match.group("verb").lower()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-github-release-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet=f"gh release {verb}",
-            message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
-        ),
-    )
-
-
-def _kubectl_apply_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``kubectl apply`` findings with a command label, not manifests.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit when ``kubectl apply`` is present. ``kubectl get`` and
-        README wording are not this class.
-    """
-    match = _KUBECTL_APPLY_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-kubectl-apply-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="kubectl apply",
-            message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
-        ),
-    )
-
-
-def _docker_push_command_hits(content: str) -> tuple[PluginHit, ...]:
-    """Return ``docker push`` findings with a command label, not image names.
-
-    Args:
-        content: Hook or manifest text.
-
-    Returns:
-        One hit for ``docker push`` or ``docker image push``.
-        ``docker ps``, ``docker pull``, and socket binds are not this class.
-    """
-    match = _DOCKER_PUSH_COMMAND.search(content)
-    if match is None:
-        return ()
-    return (
-        PluginHit(
-            rule_id="claude-plugin-docker-push-command",
-            line=content[: match.start()].count("\n") + 1,
-            snippet="docker push",
-            message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
-        ),
-    )
-
+def _docker_push_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable Docker push findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            if _direct_executable_basename(command) != "docker":
+                continue
+            folded = tuple(argument.casefold() for argument in args)
+            if folded[:1] == ("push",) or folded[:2] == ("image", "push"):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-docker-push-command",
+                        line=line,
+                        snippet="docker push",
+                        message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-docker-push-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
 
 def _terraform_apply_command_hits(
     content: str, *, manifest: bool = False
@@ -1739,13 +1867,13 @@ def _first_shell_token(segment: str) -> str:
 
 
 def _is_reporting_builtin_segment(segment: str) -> bool:
-    """Return whether the segment only prints text instead of running a CLI.
+    """Return whether the command does not execute its argument text.
 
     Args:
         segment: One unquoted command fragment.
 
     Returns:
-        ``True`` for ``echo``, ``printf``, and ``print``, including path
+        ``True`` for no-op, status, and reporting commands, including path
         and ``.exe`` spellings.
     """
     return _first_shell_token(segment) in _REPORTING_BUILTINS
@@ -1773,6 +1901,85 @@ def _manifest_command_sources(content: str) -> tuple[tuple[str, int], ...]:
 
     collect(payload)
     return tuple(found)
+
+
+def _direct_executable_basename(command: str) -> str:
+    """Return a direct executable basename without changing token identity."""
+    if not command or command != command.strip():
+        return ""
+    name = command.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _manifest_argv_sources(
+    content: str,
+) -> tuple[tuple[str, tuple[str, ...], int], ...]:
+    """Return typed direct-argv records from structural manifest objects."""
+    try:
+        payload = _load_manifest_json(content)
+    except (_DuplicateJsonMember, _NonstandardJsonConstant, json.JSONDecodeError):
+        return ()
+
+    found: list[tuple[str, tuple[str, ...], int]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            command = value.get("command")
+            args = value.get("args")
+            if (
+                isinstance(command, str)
+                and command
+                and isinstance(args, list)
+                and all(isinstance(argument, str) for argument in args)
+            ):
+                found.append((command, tuple(args), _script_line(content, command)))
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    return tuple(found)
+
+
+def _manifest_argv_command_line(
+    content: str,
+    *,
+    executable: str,
+    verb: str,
+    leading_value_option: str | None = None,
+) -> int | None:
+    """Return the source line for one direct structural manifest argv command.
+
+    Args:
+        content: Parsed-manifest source text.
+        executable: Exact executable basename without an .exe suffix.
+        verb: Exact write verb expected in argv.
+        leading_value_option: Optional single name=value global option
+            allowed before the verb.
+
+    Returns:
+        The one-based command source line, or None when identity, argv
+        types, option grammar, or verb boundaries do not match.
+    """
+    for command, args, line in _manifest_argv_sources(content):
+        command_name = _direct_executable_basename(command)
+        verb_index = 0
+        if (
+            leading_value_option is not None
+            and args
+            and args[0].casefold().startswith(leading_value_option)
+            and len(args[0]) > len(leading_value_option)
+        ):
+            verb_index = 1
+        if (
+            command_name == executable
+            and verb_index < len(args)
+            and args[verb_index].casefold() == verb
+        ):
+            return line
+    return None
 
 
 def _hosted_command_sources(
@@ -1952,6 +2159,185 @@ def _executable_command_match(    content: str, pattern: re.Pattern[str]
                     return match
                 break
     return None
+def _shell_payload_index(
+    arguments: tuple[str, ...] | list[str], *, shell_name: str
+) -> int | None:
+    """Return the payload index after bounded executable shell options."""
+    seen_short_option = False
+    for index, token in enumerate(arguments):
+        if shell_name == "bash" and token in _BASH_NO_VALUE_LONG_OPTIONS:
+            if seen_short_option:
+                return None
+            continue
+        if not token.startswith("-") or token.startswith("--"):
+            return None
+        seen_short_option = True
+        flags = token[1:]
+        allowed_flags = _SHELL_NO_VALUE_SHORT_OPTIONS
+        if shell_name == "bash":
+            allowed_flags |= _BASH_NO_VALUE_SHORT_OPTIONS
+        if not flags or any(
+            flag not in allowed_flags and flag not in {"c", "n"}
+            for flag in flags
+        ):
+            return None
+        if "n" in flags:
+            return None
+        if "c" in flags:
+            payload_index = index + 1
+            return payload_index if payload_index < len(arguments) else None
+    return None
+
+
+def _nested_shell_payload_sources(
+    content: str, *, manifest: bool
+) -> tuple[tuple[str, int], ...]:
+    """Return bounded direct shell -c payloads with their source line."""
+    found: list[tuple[str, int]] = []
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        inert_payloads = _literal_heredoc_payload_spans(source)
+        source_offset = 0
+        for line_index, raw_line in enumerate(source.splitlines(keepends=True)):
+            line = raw_line.rstrip("\r\n")
+            comment_at = _unquoted_hash_index(line)
+            executable_line = line if comment_at is None else line[:comment_at]
+            for segment_start, segment_end in _iter_unquoted_segment_bounds(
+                executable_line
+            ):
+                absolute_start = source_offset + segment_start
+                if any(
+                    start <= absolute_start < end for start, end in inert_payloads
+                ):
+                    continue
+                segment = executable_line[segment_start:segment_end]
+                try:
+                    tokens = shlex.split(segment, comments=False, posix=True)
+                except ValueError:
+                    continue
+                token_index = 0
+                while (
+                    token_index < len(tokens)
+                    and _SHELL_ASSIGNMENT_PREFIX.match(tokens[token_index])
+                ):
+                    token_index += 1
+                if token_index >= len(tokens):
+                    continue
+                shell_name = _direct_executable_basename(tokens[token_index])
+                if shell_name not in _SHELL_COMMAND_INTERPRETERS:
+                    continue
+                shell_arguments = tokens[token_index + 1 :]
+                payload_index = _shell_payload_index(
+                    shell_arguments, shell_name=shell_name
+                )
+                if payload_index is None:
+                    continue
+                payload = shell_arguments[payload_index]
+                if payload:
+                    found.append((payload, first_line + line_index))
+            source_offset += len(raw_line)
+
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            shell_name = _direct_executable_basename(command)
+            if shell_name not in _SHELL_COMMAND_INTERPRETERS:
+                continue
+            payload_index = _shell_payload_index(args, shell_name=shell_name)
+            if payload_index is not None and args[payload_index]:
+                found.append((args[payload_index], line))
+    return tuple(found)
+
+
+def _terraform_apply_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable terraform apply findings without vars."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-terraform-apply-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="terraform apply",
+                message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+            ),
+        )
+    if manifest:
+        line = _manifest_argv_command_line(
+            content,
+            executable="terraform",
+            verb="apply",
+            leading_value_option="-chdir=",
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-terraform-apply-command",
+                    line=line,
+                    snippet="terraform apply",
+                    message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _TERRAFORM_APPLY_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-terraform-apply-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="terraform apply",
+                    message=CLAUDE_PLUGIN_TERRAFORM_APPLY_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
+
+def _helm_install_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable helm install findings without chart names."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
+        if match is None:
+            continue
+        return (
+            PluginHit(
+                rule_id="claude-plugin-helm-install-command",
+                line=first_line + source[: match.start()].count("\n"),
+                snippet="helm install",
+                message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+            ),
+        )
+    if manifest:
+        line = _manifest_argv_command_line(content, executable="helm", verb="install")
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-helm-install-command",
+                    line=line,
+                    snippet="helm install",
+                    message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+                ),
+            )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _HELM_INSTALL_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-helm-install-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="helm install",
+                    message=CLAUDE_PLUGIN_HELM_INSTALL_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
+
 def _vercel_deploy_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
@@ -2418,8 +2804,19 @@ def _mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
     return tuple(hits)
 
 
+def _mcp_secret_reference_token(value: object) -> str | None:
+    """Return the named secret from an actual MCP environment reference."""
+    if not isinstance(value, str):
+        return None
+    reference = _SECRET_REF.search(value)
+    if reference is None:
+        return None
+    match = _NAMED_SECRET_TOKEN.search(reference.group(0))
+    return match.group(0) if match is not None else None
+
+
 def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
-    """Return hits when MCP env, args, or command carry a named secret.
+    """Return hits when an MCP execution field carries a named secret.
 
     Curl/wget/fetch copies stay the network class. Prompt and log copies
     stay the prompt class. Snippets are the env name only.
@@ -2442,10 +2839,15 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
         env = server.get("env")
         if isinstance(env, dict):
             for key, value in env.items():
-                blob = f"{key} {value}" if isinstance(value, str) else str(key)
-                match = _NAMED_SECRET_TOKEN.search(blob)
-                if match is not None:
-                    token = match.group(0)
+                token = (
+                    key
+                    if isinstance(key, str)
+                    and _NAMED_SECRET_TOKEN.fullmatch(key) is not None
+                    else None
+                )
+                if token is None:
+                    token = _mcp_secret_reference_token(value)
+                if token is not None:
                     return (
                         PluginHit(
                             rule_id="claude-plugin-secret-to-mcp",
@@ -2457,11 +2859,8 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
         args = server.get("args")
         if isinstance(args, list):
             for arg in args:
-                if not isinstance(arg, str):
-                    continue
-                match = _NAMED_SECRET_TOKEN.search(arg)
-                if match is not None:
-                    token = match.group(0)
+                token = _mcp_secret_reference_token(arg)
+                if token is not None:
                     return (
                         PluginHit(
                             rule_id="claude-plugin-secret-to-mcp",
@@ -2470,11 +2869,9 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                             message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
                         ),
                     )
-        command = server.get("command")
-        if isinstance(command, str):
-            match = _NAMED_SECRET_TOKEN.search(command)
-            if match is not None:
-                token = match.group(0)
+        for field_name in ("command", "url"):
+            token = _mcp_secret_reference_token(server.get(field_name))
+            if token is not None:
                 return (
                     PluginHit(
                         rule_id="claude-plugin-secret-to-mcp",
@@ -2483,6 +2880,19 @@ def _secret_to_mcp_hits(payload: object, content: str) -> tuple[PluginHit, ...]:
                         message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
                     ),
                 )
+        headers = server.get("headers")
+        if isinstance(headers, dict):
+            for value in headers.values():
+                token = _mcp_secret_reference_token(value)
+                if token is not None:
+                    return (
+                        PluginHit(
+                            rule_id="claude-plugin-secret-to-mcp",
+                            line=_line_of(content, token),
+                            snippet=token,
+                            message=CLAUDE_PLUGIN_SECRET_TO_MCP_MESSAGE,
+                        ),
+                    )
     return ()
 
 
@@ -2562,7 +2972,7 @@ def _conflicting_entry_name_hits(
 def _conflicting_identity_hits(
     root: Path, payload: object
 ) -> tuple[PluginHit, ...]:
-    """Return one hit when plugin, skill, or command NFC names collide.
+    """Return one hit when an identity namespace repeats an NFC name.
 
     Non-NFC names stay the normalized-name class. Vendored trees are skipped.
     Duplicate names emit one finding, not one per file.
@@ -2574,36 +2984,42 @@ def _conflicting_identity_hits(
     Returns:
         Zero or one conflicting-identity hit.
     """
-    seen: set[str] = set()
+    seen_by_namespace: dict[str, set[str]] = {"plugin": set()}
     for entry in _plugin_entries(payload):
         name = _nfc_identity_name(entry.get("name"))
         if name is None:
             continue
-        if name in seen:
+        if name in seen_by_namespace["plugin"]:
             return (_conflict_identity_hit(),)
-        seen.add(name)
+        seen_by_namespace["plugin"].add(name)
     for path in _walk_entries(root):
         if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
         if _is_vendored_scope_relative(relative):
             continue
-        name = _identity_name_from_path(path, relative)
-        if name is None:
+        identity = _identity_from_path(path, relative)
+        if identity is None:
             continue
+        namespace, name = identity
+        seen = seen_by_namespace.setdefault(namespace, set())
         if name in seen:
             return (_conflict_identity_hit(),)
         seen.add(name)
     return ()
 
 
-def _identity_name_from_path(path: Path, relative: str) -> str | None:
-    """Return an NFC identity name declared on a skill or command file."""
+def _identity_from_path(path: Path, relative: str) -> tuple[str, str] | None:
+    """Return the namespace and NFC name declared by a local identity file."""
     posix = f"/{relative.replace(chr(92), '/')}/"
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+    if relative.startswith("commands/") and path.suffix.lower() == ".md":
+        command_path = relative[len("commands/") : -len(path.suffix)]
+        name = _nfc_identity_name(command_path.replace("/", ":"))
+        return ("skill", name) if name is not None else None
     if path.name == "skill.json":
         try:
             payload = json.loads(content)
@@ -2611,13 +3027,19 @@ def _identity_name_from_path(path: Path, relative: str) -> str | None:
             return None
         if not isinstance(payload, dict):
             return None
-        return _nfc_identity_name(payload.get("name"))
+        name = _nfc_identity_name(payload.get("name"))
+        return ("skill", name) if name is not None else None
     markdown = path.name.lower().endswith(".md") and any(
         marker in posix for marker in ("/skills/", "/commands/", "/agents/")
     )
     if _is_skill_surface(path) or markdown:
         text, _line = _markdown_name(content)
-        return _nfc_identity_name(text)
+        name = _nfc_identity_name(text)
+        if name is None:
+            return None
+        if "/agents/" in posix:
+            return "agent", name
+        return "skill", name
     return None
 
 
@@ -3358,7 +3780,7 @@ def _checksum_listed_name_escapes(name: str) -> bool:
     ):
         return True
     parts = [part for part in raw.split("/") if part not in {"", "."}]
-    return any(part == ".." or part.startswith("..") for part in parts)
+    return any(part == ".." for part in parts)
 
 
 def _parse_gnu_checksum_line(line: str) -> tuple[str, str] | None:
@@ -3415,10 +3837,10 @@ def _resolve_checksum_target(
 ) -> Path | None:
     """Return the in-root regular file named by ``listed``, if any.
 
-    Resolution tries the checksum directory, the plugin root, then
-    ``.claude-plugin/<basename>`` so a root ``SHA256SUMS`` can name the
-    plugin artifact as ``plugin.json``. Symlinks and escaped paths yield
-    ``None``.
+    Resolution tries the checksum directory and plugin root. A root
+    ``SHA256SUMS`` may also name the plugin artifact as the bare
+    ``plugin.json`` basename. Nested paths never collapse to a basename.
+    Symlinks and escaped paths yield ``None``.
     """
     if _checksum_listed_name_escapes(listed):
         return None
@@ -3427,11 +3849,12 @@ def _resolve_checksum_target(
         root_resolved = root.resolve()
     except OSError:
         return None
-    candidates = (
+    candidates = [
         checksum_path.parent / raw,
         root / raw,
-        root / ".claude-plugin" / Path(raw).name,
-    )
+    ]
+    if checksum_path.parent == root and Path(raw).parent == Path("."):
+        candidates.append(root / ".claude-plugin" / Path(raw).name)
     for candidate in candidates:
         try:
             if candidate.is_symlink() or not candidate.is_file():
@@ -3501,6 +3924,192 @@ def _empty_catalog_identity() -> dict[str, str]:
         "catalog_commit_sha": "",
         **_empty_identity(),
     }
+
+
+class _MarketplaceCatalogError(ValueError):
+    """Raised when a marketplace catalog cannot bind one plugin identity."""
+
+
+def _normalize_marketplace_entry(
+    entry: object,
+    *,
+    plugin_root: object | None = None,
+) -> dict[str, object]:
+    """Return one validated entry with URL/SHA source aliases normalized."""
+    if not isinstance(entry, dict):
+        raise _MarketplaceCatalogError("invalid plugin entry")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise _MarketplaceCatalogError("invalid plugin name")
+    version = entry.get("version")
+    if version is not None and not isinstance(version, str):
+        raise _MarketplaceCatalogError("invalid plugin version")
+    source = entry.get("source")
+    if isinstance(source, str):
+        normalized_path = source.replace("\\", "/")
+        if not normalized_path.startswith("./"):
+            normalized_root = (
+                plugin_root.replace("\\", "/")
+                if isinstance(plugin_root, str)
+                else ""
+            )
+            root_parts = normalized_root[2:].split("/")
+            if (
+                not normalized_path
+                or normalized_path in {".", ".."}
+                or "/" in normalized_path
+                or _CONCEALED_CHAR.search(normalized_path)
+                or (
+                    normalized_root != "."
+                    and (
+                        not normalized_root.startswith("./")
+                        or not root_parts
+                        or any(part in {"", ".", ".."} for part in root_parts)
+                    )
+                )
+            ):
+                raise _MarketplaceCatalogError("invalid relative plugin source")
+            normalized_path = (
+                f"./{normalized_path}"
+                if normalized_root == "."
+                else f"{normalized_root}/{normalized_path}"
+            )
+        path_parts = normalized_path[2:].split("/")
+        if (
+            not normalized_path.startswith("./")
+            or not path_parts
+            or any(part in {"", ".", ".."} for part in path_parts)
+            or _CONCEALED_CHAR.search(normalized_path)
+        ):
+            raise _MarketplaceCatalogError("invalid relative plugin source")
+        normalized = dict(entry)
+        normalized["source"] = {"path": normalized_path}
+        return normalized
+    if not isinstance(source, dict):
+        raise _MarketplaceCatalogError("invalid plugin source")
+    normalized_source = dict(source)
+    repository = source.get("repo")
+    url = source.get("url")
+    if repository is None:
+        if not isinstance(url, str) or not url:
+            raise _MarketplaceCatalogError("invalid source repository")
+        normalized_source["repo"] = url
+    elif not isinstance(repository, str) or not repository:
+        raise _MarketplaceCatalogError("invalid source repository")
+    elif url is not None and (not isinstance(url, str) or not url):
+        raise _MarketplaceCatalogError("invalid source URL")
+    sha = source.get("sha")
+    ref = source.get("ref")
+    if sha is not None:
+        if not isinstance(sha, str) or not sha:
+            raise _MarketplaceCatalogError("invalid source SHA")
+        normalized_source["ref"] = sha
+    elif not isinstance(ref, str) or not ref:
+        raise _MarketplaceCatalogError("invalid source ref")
+    path_value = source.get("path")
+    if path_value is not None and not isinstance(path_value, str):
+        raise _MarketplaceCatalogError("invalid source path")
+    normalized = dict(entry)
+    normalized["source"] = normalized_source
+    return normalized
+
+
+def _select_marketplace_entry(
+    payload: object | None,
+    root: Path,
+) -> dict[str, object]:
+    """Select exactly one valid catalog entry for the materialized plugin."""
+    if not isinstance(payload, dict):
+        raise _MarketplaceCatalogError("invalid catalog document")
+    plugin_name = _plugin_identity(root)["plugin_name"]
+    if not plugin_name:
+        raise _MarketplaceCatalogError("materialized plugin identity is missing")
+    metadata = payload.get("metadata")
+    plugin_root = metadata.get("pluginRoot") if isinstance(metadata, dict) else None
+    plugins = payload.get("plugins")
+    if plugins is None:
+        selected = _normalize_marketplace_entry(payload, plugin_root=plugin_root)
+        if selected["name"] != plugin_name:
+            raise _MarketplaceCatalogError("catalog entry does not match plugin")
+        return selected
+    if not isinstance(plugins, list):
+        raise _MarketplaceCatalogError("invalid plugins collection")
+    matches: list[dict[str, object]] = []
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            raise _MarketplaceCatalogError("invalid plugin entry")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise _MarketplaceCatalogError("invalid plugin name")
+        version = entry.get("version")
+        if version is not None and not isinstance(version, str):
+            raise _MarketplaceCatalogError("invalid plugin version")
+        if name == plugin_name:
+            matches.append(entry)
+    if len(matches) != 1:
+        raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
+    normalized_match = _normalize_marketplace_entry(
+        matches[0], plugin_root=plugin_root
+    )
+    selected = dict(payload)
+    selected["plugins"] = [normalized_match]
+    return selected
+
+
+def _json_documents_match(left: object, right: object) -> bool:
+    """Return whether two parsed JSON values have the same canonical value."""
+    try:
+        return json.dumps(
+            left,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ) == json.dumps(
+            right,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _receipt_catalog_identity(
+    root: Path,
+    catalog_payload: object | None,
+    catalog_bytes: bytes | None,
+) -> tuple[dict[str, str], bool]:
+    """Derive catalog identity from authoritative bytes and report validity."""
+    payload = catalog_payload
+    valid = True
+    if catalog_bytes is not None:
+        try:
+            parsed = _load_manifest_json(catalog_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember):
+            return _empty_catalog_identity(), False
+        if catalog_payload is not None and not _json_documents_match(
+            catalog_payload, parsed
+        ):
+            valid = False
+        payload = parsed
+    if payload is None:
+        return _empty_catalog_identity(), valid
+    try:
+        selected = _select_marketplace_entry(payload, root)
+    except _MarketplaceCatalogError:
+        return _empty_catalog_identity(), False
+    return _catalog_identity(selected), valid
+
+
+def _invalid_catalog_hit() -> PluginHit:
+    """Return a bounded fail-closed finding for an invalid catalog binding."""
+    return PluginHit(
+        rule_id="claude-plugin-source-mismatch",
+        line=1,
+        snippet="catalog_identity",
+        message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+        file="marketplace.json",
+    )
 
 
 def _catalog_identity(payload: object | None) -> dict[str, str]:

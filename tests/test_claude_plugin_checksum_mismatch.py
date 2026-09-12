@@ -437,3 +437,32 @@ def test_parse_helpers_cover_empty_and_quoted_names() -> None:
     assert nul is True
     assert drive is True
     assert unc is True
+
+
+def test_missing_nested_plugin_json_does_not_fall_back_to_root_basename(
+    tmp_path: Path,
+) -> None:
+    """A missing nested checksum target must not bind the root plugin manifest."""
+    root = _licensed_plugin(tmp_path)
+    digest = _sha256(_plugin_json(root))
+    (root / "SHA256SUMS").write_text(
+        f"{digest}  nested/plugin.json\n",
+        encoding="utf-8",
+    )
+    hits = _checksum_hits(root)
+    assert hits
+    assert "nested/plugin.json" in hits[0].snippet
+
+
+def test_matching_dot_prefixed_regular_filename_is_not_traversal(
+    tmp_path: Path,
+) -> None:
+    """A regular filename beginning with two dots is not a parent segment."""
+    root = _licensed_plugin(tmp_path)
+    payload = root / "..safe.bin"
+    payload.write_bytes(b"safe payload")
+    (root / "SHA256SUMS").write_text(
+        f"{_sha256(payload)}  ..safe.bin\n",
+        encoding="utf-8",
+    )
+    assert _checksum_hits(root) == []

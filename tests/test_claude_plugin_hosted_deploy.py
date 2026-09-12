@@ -346,6 +346,7 @@ def test_manifest_reporting_commands_and_description_are_not_this_class(
     manifest["description"] = "operators may later run vercel deploy"
     manifest["hooks"] = {
         "PostToolUse": [
+            {"command": "hooks/session.sh"},
             {"command": 'echo "fly deploy"'},
             {"command": "printf '%s\\n' 'vercel deploy'"},
         ],

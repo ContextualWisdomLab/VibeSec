@@ -18,6 +18,12 @@ _TERRAFORM_RULE = "claude-plugin-terraform-apply-command"
 _HELM_RULE = "claude-plugin-helm-install-command"
 _KUBECTL_RULE = "claude-plugin-kubectl-apply-command"
 _DOCKER_PUSH_RULE = "claude-plugin-docker-push-command"
+_HOSTED_DEPLOY_RULES = frozenset(
+    {
+        "claude-plugin-vercel-deploy-command",
+        "claude-plugin-fly-deploy-command",
+    }
+)
 _SECRET = "sk-tf-must-not-leak"
 _BIDI = "\u202e"
 _THIS_CLASS = frozenset({_TERRAFORM_RULE, _HELM_RULE})
@@ -100,8 +106,10 @@ def test_terraform_plan_and_helm_list_stay_inventory(tmp_path: Path) -> None:
     assert receipt.scan_result == "pass"
 
 
-def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
-    """Hosted deploy CLIs stay inventory; this slice does not own them."""
+def test_vercel_and_fly_deploy_stay_outside_terraform_helm_class(
+    tmp_path: Path,
+) -> None:
+    """Hosted deploy findings remain distinct from Terraform and Helm."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nvercel deploy\nfly deploy\n",
@@ -110,7 +118,8 @@ def test_vercel_deploy_and_fly_deploy_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
+    assert _HOSTED_DEPLOY_RULES.issubset(receipt.finding_summary)
+    assert receipt.scan_result == "fail"
     assert inventory["deployment_write"] is True
 
 
@@ -193,6 +202,211 @@ def test_plugin_manifest_helm_install_fails_admission(tmp_path: Path) -> None:
     assert _hits(root, _HELM_RULE)
     assert receipt.scan_result == "fail"
     assert _HELM_RULE in receipt.finding_summary
+
+
+def test_manifest_command_args_preserve_executable_argv() -> None:
+    """Each direct manifest argv surface independently preserves its identity."""
+    cases = (
+        ({"command": "terraform", "args": ["apply", "-auto-approve"]}, _TERRAFORM_RULE),
+        ({"command": "/usr/bin/terraform", "args": ["apply"]}, _TERRAFORM_RULE),
+        (
+            {"command": "terraform", "args": ["-chdir=infra", "apply"]},
+            _TERRAFORM_RULE,
+        ),
+        (
+            {"command": "helm", "args": ["install", "app", "chart/"]},
+            _HELM_RULE,
+        ),
+    )
+    for manifest, expected_rule in cases:
+        content = json.dumps({"mcpServers": {"writer": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        rule_ids = {hit.rule_id for hit in hits}
+
+        assert expected_rule in rule_ids
+        assert len(rule_ids & _THIS_CLASS) == 1
+
+
+def test_manifest_command_args_preserve_nonwrite_token_boundaries() -> None:
+    """Non-write, non-token, and non-array args do not invent write commands."""
+    manifests = (
+        {"command": "terraform", "args": ["plan"]},
+        {"command": "helm", "args": ["list"]},
+        {"command": "terraform", "args": ["apply later"]},
+        {"command": "terraform", "args": ["applyLocal"]},
+        {"command": "terraform", "args": ["apply-now"]},
+        {"command": "terraform", "args": ["-chdir=infra", "plan"]},
+        {"command": "terraform", "args": ["-plugin-dir", "apply"]},
+        {"command": " terraform ", "args": ["apply"]},
+        {"command": "helm", "args": ["install-chart"]},
+        {"command": "wrapper", "args": ["terraform", "apply"]},
+        {"command": "echo", "args": ["helm", "install", "app", "chart/"]},
+        {"command": "helm", "args": "install"},
+        {"command": "terraform", "args": ["apply", 1]},
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"reader": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_nested_shell_c_payloads_fail_admission() -> None:
+    """Direct shell -c payloads preserve executable deployment commands."""
+    cases = (
+        ("#!/bin/sh\nsh -c 'terraform apply -auto-approve'\n", _TERRAFORM_RULE),
+        ('#!/bin/sh\n/bin/bash -lc "helm install app chart/"\n', _HELM_RULE),
+        (
+            "#!/bin/sh\nTF_IN_AUTOMATION=1 bash -ec 'terraform apply'\n",
+            _TERRAFORM_RULE,
+        ),
+        ("#!/bin/sh\nbash -e -c 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\nbash -ce 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\nsh -cx 'helm install app chart/'\n", _HELM_RULE),
+        ("#!/bin/sh\nsh -cc 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\ndash -s -c 'terraform apply'\n", _TERRAFORM_RULE),
+        ("#!/bin/sh\nbash --login -c 'helm install app chart/'\n", _HELM_RULE),
+        (
+            "#!/bin/sh\nbash --noprofile -c 'helm install app chart/'\n",
+            _HELM_RULE,
+        ),
+        (
+            "#!/bin/sh\necho checked; sh -c 'echo ok && terraform apply'\n",
+            _TERRAFORM_RULE,
+        ),
+    )
+    for body, expected_rule in cases:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        rule_ids = {hit.rule_id for hit in hits}
+
+        assert expected_rule in rule_ids
+
+    for option in (
+        "-ac",
+        "-bc",
+        "-hc",
+        "-kc",
+        "-mc",
+        "-pc",
+        "-tc",
+        "-Bc",
+        "-Cc",
+        "-Ec",
+        "-Hc",
+        "-Pc",
+        "-Tc",
+    ):
+        body = f"#!/bin/sh\nbash {option} 'terraform apply'\n"
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
+
+    for option in ("--debug", "--debugger", "--noediting", "--pretty-print"):
+        body = f"#!/bin/sh\nbash {option} -c 'terraform apply'\n"
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
+
+
+def test_manifest_nested_shell_c_payloads_fail_admission() -> None:
+    """Shell-string and direct-argv manifest payloads use the same boundary."""
+    manifests = (
+        {"command": "bash -c 'terraform apply -auto-approve'"},
+        {"command": "bash", "args": ["-c", "helm install app chart/"]},
+        {"command": "/bin/sh", "args": ["-lc", "terraform apply"]},
+        {"command": "bash", "args": ["-e", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["-ce", "terraform apply"]},
+        {"command": "sh", "args": ["-cx", "helm install app chart/"]},
+        {"command": "sh", "args": ["-cc", "terraform apply"]},
+        {"command": "dash", "args": ["-i", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["--login", "-c", "helm install app chart/"]},
+        {
+            "command": "bash",
+            "args": ["--noprofile", "-c", "helm install app chart/"],
+        },
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"writer": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
+
+    bash_options = (
+        "-ac",
+        "-bc",
+        "-hc",
+        "-kc",
+        "-mc",
+        "-pc",
+        "-tc",
+        "-Bc",
+        "-Cc",
+        "-Ec",
+        "-Hc",
+        "-Pc",
+        "-Tc",
+        "--debug",
+        "--debugger",
+        "--noediting",
+        "--pretty-print",
+    )
+    for option in bash_options:
+        args = [option, "terraform apply"]
+        if option.startswith("--"):
+            args.insert(1, "-c")
+        content = json.dumps(
+            {"mcpServers": {"writer": {"command": "bash", "args": args}}}
+        )
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert any(hit.rule_id == _TERRAFORM_RULE for hit in hits)
+
+
+def test_nested_shell_c_payload_boundaries_stay_negative() -> None:
+    """Reporting, wrapper, malformed, and non-write shell payloads stay inert."""
+    hook_bodies = (
+        "#!/bin/sh\necho \"sh -c 'terraform apply'\"\n",
+        "#!/bin/sh\ncommand=\"sh -c 'helm install app chart/'\"\n",
+        "#!/bin/sh\nfalse sh -c 'terraform apply'\n",
+        "#!/bin/sh\nwrapper sh -c 'helm install app chart/'\n",
+        "#!/bin/sh\nsh -c \"echo 'terraform apply'\"\n",
+        "#!/bin/sh\nsh -c 'command=helm install app chart/'\n",
+        "#!/bin/sh\nsh -c 'terraform plan'\n",
+        "#!/bin/sh\nsh -c 'helm install-chart app chart/'\n",
+        "#!/bin/sh\necho ok # ; sh -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -C 'terraform apply'\n",
+        "#!/bin/sh\nbash -gc 'terraform apply'\n",
+        "#!/bin/sh\nbash -g -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -o pipefail -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -nc 'terraform apply'\n",
+        "#!/bin/sh\nsh -cn 'terraform apply'\n",
+        "#!/bin/sh\ndash -r -c 'terraform apply'\n",
+        "#!/bin/sh\nbash -e --noprofile -c 'terraform apply'\n",
+    )
+    for body in hook_bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+    manifests = (
+        {"command": "bash", "args": ["terraform apply"]},
+        {"command": "bash", "args": ["-c"]},
+        {"command": "bash", "args": "-c terraform apply"},
+        {"command": "bash", "args": ["-c", "terraform", "apply"]},
+        {"command": "echo", "args": ["sh", "-c", "terraform apply"]},
+        {"command": "wrapper", "args": ["bash", "-c", "helm install"]},
+        {"command": "bash", "args": ["-c", "terraform apply", 1]},
+        {"command": "bash", "args": ["-C", "terraform apply"]},
+        {"command": "bash", "args": ["-gc", "terraform apply"]},
+        {"command": "bash", "args": ["-g", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["-o", "pipefail", "-c", "terraform apply"]},
+        {"command": "bash", "args": ["-nc", "terraform apply"]},
+        {"command": "sh", "args": ["-cn", "terraform apply"]},
+        {"command": "dash", "args": ["-r", "-c", "terraform apply"]},
+        {
+            "command": "bash",
+            "args": ["-e", "--noprofile", "-c", "terraform apply"],
+        },
+    )
+    for manifest in manifests:
+        content = json.dumps({"mcpServers": {"reader": manifest}})
+        hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", content)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
 
 
 def test_empty_hook_is_not_this_class() -> None:
@@ -335,3 +549,26 @@ def test_heredoc_opener_lookalikes_do_not_hide_real_commands() -> None:
         hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
         assert any(hit.rule_id in _THIS_CLASS for hit in hits)
 
+
+
+def test_nonexecuting_builtins_do_not_execute_argument_text() -> None:
+    """No-op and status builtins do not execute command-like arguments."""
+    bodies = (
+        "#!/bin/sh\n: terraform apply -auto-approve\n",
+        "#!/bin/sh\ntrue helm install app chart/\n",
+        "#!/bin/sh\nfalse terraform apply -auto-approve\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert _THIS_CLASS.isdisjoint(hit.rule_id for hit in hits)
+
+
+def test_command_after_nonexecuting_builtin_still_fails() -> None:
+    """A no-op argument cannot hide a later real deployment command."""
+    bodies = (
+        "#!/bin/sh\n: terraform apply; helm install app chart/\n",
+        "#!/bin/sh\nfalse helm install app chart/ || terraform apply\n",
+    )
+    for body in bodies:
+        hits = inspect_claude_plugin_file("session.sh", "hooks/session.sh", body)
+        assert any(hit.rule_id in _THIS_CLASS for hit in hits)
