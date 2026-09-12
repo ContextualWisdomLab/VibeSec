@@ -93,7 +93,9 @@ files being scanned, then applies the union of relevant checks. Examples:
   for the exact AppGuardrail release and scan-policy bytes, plus
   `sbom_sha256` of a deterministic CycloneDX 1.5 dependency document, and
   `claude-plugin-checksum-mismatch` when a first-party checksum file
-  disagrees with artifact bytes on disk, `claude-plugin-github-merge-command`
+  disagrees with artifact bytes on disk,
+  `claude-plugin-unsigned-checksum` when digest rows have no sibling
+  signature file, `claude-plugin-github-merge-command`
   for hook or manifest ``gh pr merge``,
   `claude-plugin-github-release-command` for ``gh release``
   create/upload/delete/edit,

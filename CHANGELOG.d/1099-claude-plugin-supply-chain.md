@@ -124,7 +124,10 @@
   or ``*.sha256`` next to ``plugin.json`` that names the plugin artifact
   or enumerated files fails as `claude-plugin-checksum-mismatch` when the
   digest disagrees with bytes on disk. Matching checksums, comment-only
-  rows, and missing checksum files are not that class. Cosign or GPG
+  rows, and missing checksum files are not that class. A checksum file
+  with digest rows and no non-empty sibling ``.sig``, ``.asc``, ``.gpg``,
+  ``.bundle``, or ``cosign.bundle`` fails as
+  `claude-plugin-unsigned-checksum`. Cosign or GPG
   network verification is not required. Snippets are path labels, not
   hashes or secrets. ``sbom_sha256`` stays the CycloneDX receipt digest.
   Hook or manifest ``gh pr merge`` fails as

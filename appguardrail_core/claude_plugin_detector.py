@@ -50,7 +50,10 @@ not hook scans. A first-party ``SHA256SUMS``, ``SHA256SUMS.txt``,
 ``checksums.sha256``, or ``*.sha256`` next to ``plugin.json`` that names
 the plugin artifact or enumerated files fails closed when the digest
 disagrees with bytes on disk. Comments are ignored. Absence of a
-checksum or Cosign signature is not that class. Receipts bind
+checksum file is not that class. A checksum file with digest rows and
+no non-empty sibling ``.sig``, ``.asc``, ``.gpg``, ``.bundle``, or
+``cosign.bundle`` fails closed as an unsigned checksum. Network Cosign
+or GPG verification is not performed. Receipts bind
 ``policy_provenance`` to the running AppGuardrail release and the exact
 scan-policy bytes, and ``sbom_sha256`` to a deterministic CycloneDX
 document of declared dependencies; verification fails closed when that
@@ -154,8 +157,14 @@ CLAUDE_PLUGIN_LICENSE_MISMATCH_MESSAGE: Final = (
 CLAUDE_PLUGIN_CHECKSUM_MISMATCH_MESSAGE: Final = (
     "Claude plugin checksum file lists a SHA-256 digest that does not match "
     "the bytes on disk. Bind admission to the exact artifact. Absence of a "
-    "checksum or Cosign signature is not this class. "
+    "checksum file is not this class. "
     "[CWE-494 - Download of Code Without Integrity Check]"
+)
+CLAUDE_PLUGIN_UNSIGNED_CHECKSUM_MESSAGE: Final = (
+    "Claude plugin checksum file lists digests but has no sibling signature "
+    "file. Place a non-empty Cosign bundle or detached GPG signature next "
+    "to the checksum. Network verification is not performed. "
+    "[CWE-347 - Improper Verification of Cryptographic Signature]"
 )
 CLAUDE_PLUGIN_DYNAMIC_EVAL_MESSAGE: Final = (
     "Claude plugin hook evaluates a string as code. Dynamic eval, exec, "
@@ -1041,6 +1050,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     else:
         hits.extend(_license_mismatch_hits(root, {}))
     hits.extend(_checksum_mismatch_hits(root))
+    hits.extend(_unsigned_checksum_hits(root))
     _, file_count, scanned_byte_count = _artifact_digest(root)
     if file_count > _MAX_PACKAGE_FILES or scanned_byte_count > _MAX_PACKAGE_BYTES:
         hits.append(
@@ -3903,6 +3913,65 @@ def _checksum_mismatch_hits(root: Path) -> tuple[PluginHit, ...]:
             actual = _sha256(_regular_file_bytes(target))
             if actual != digest:
                 hits.append(_checksum_mismatch_hit(listed, relative))
+    return tuple(hits)
+
+
+_CHECKSUM_SIGNATURE_SUFFIXES: Final = (".sig", ".asc", ".gpg", ".bundle")
+
+
+def _checksum_has_signature_file(checksum_path: Path) -> bool:
+    """Return whether a non-empty sibling signature file exists.
+
+    Args:
+        checksum_path: First-party checksum file.
+
+    Returns:
+        True when a regular, non-symlink sibling ``.sig``, ``.asc``,
+        ``.gpg``, ``.bundle``, or ``cosign.bundle`` has a non-zero size.
+        Empty files, missing files, and unreadable paths are False.
+        Bytes are not cryptographically verified.
+    """
+    names = [checksum_path.name + suffix for suffix in _CHECKSUM_SIGNATURE_SUFFIXES]
+    names.append("cosign.bundle")
+    for name in names:
+        candidate = checksum_path.parent / name
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            if candidate.stat().st_size > 0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _unsigned_checksum_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return findings when checksum digest rows have no sibling signature.
+
+    Missing checksum files and comment-only checksum files are not this
+    class. Network Cosign or GPG verification is not performed. Snippets
+    are checksum filenames, never digests or secret literals.
+    """
+    hits: list[PluginHit] = []
+    for path in _checksum_file_paths(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not _parse_checksum_entries(text, path):
+            continue
+        if _checksum_has_signature_file(path):
+            continue
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-unsigned-checksum",
+                line=1,
+                snippet=_sanitize_path_snippet(path.name),
+                message=CLAUDE_PLUGIN_UNSIGNED_CHECKSUM_MESSAGE,
+                file=relative,
+            )
+        )
     return tuple(hits)
 
 
