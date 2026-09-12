@@ -39,7 +39,6 @@ def findings_to_sarif(
     normalized = normalize_findings(findings)
 
     rules: dict[str, dict[str, Any]] = {}
-    # Bolt: O(1) index caching to avoid O(N^2) list().index() lookup overhead
     rule_indices: dict[str, int] = {}
     results: list[dict[str, Any]] = []
     for f in normalized:
