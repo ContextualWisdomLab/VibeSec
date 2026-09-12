@@ -24,9 +24,11 @@ def test_console_exposes_loading_busy_and_error_states():
     html = _console_html()
 
     assert 'tr.setAttribute("aria-busy","true");' in html
+    assert 'tr.setAttribute("aria-disabled","true");' in html
     assert 'aria-live="polite" class="muted">Loading scan details...' in html
     assert 'role="alert" class="err">Error loading details:' in html
     assert 'tr.removeAttribute("aria-busy");' in html
+    assert 'tr.removeAttribute("aria-disabled");' in html
 
 
 def test_console_detail_scrolling_respects_reduced_motion():
