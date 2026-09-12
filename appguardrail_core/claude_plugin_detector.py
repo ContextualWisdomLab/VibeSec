@@ -21,13 +21,15 @@ skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
 not permission, except that hook or manifest ``gh pr merge`` and
 ``gh release create|upload|delete|edit`` fail closed as command findings.
-Hook or manifest paths into ``~/.netrc``, ``~/.aws/credentials``,
+Hook or manifest ``kubectl apply`` and ``docker push`` fail closed as
+deployment-write command findings. Hook or manifest paths into
+``~/.netrc``, ``~/.aws/credentials``,
 GitHub CLI hosts, Docker auth ``config.json``, cookie jars, and
 ``~/.ssh/id_*`` private keys fail closed as credential-store findings.
 Chrome and Firefox profile stores stay browser-profile findings.
 Hardcoded PATs stay write-token findings.
-``gh issue create``, ``gh pr review``, ``kubectl apply``, and
-``docker push`` stay inventory. Skill
+``gh issue create``, ``gh pr review``, ``kubectl get``, ``docker ps``,
+``terraform apply``, and ``helm install`` stay inventory. Skill
 homoglyph, injection, exfiltration, and placeholder hits reuse #1036 rule
 identities. Skill, command, or agent text that hides tool use, rewrites
 the system prompt, or escalates the declared goal is a separate
@@ -222,6 +224,16 @@ CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE: Final = (
     "delete, or edit. Publishing a release is write authority. Remove the "
     "command. [CWE-250 - Execution with Unnecessary Privileges]"
 )
+CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs kubectl apply. Applying manifests "
+    "is write authority on a cluster. Remove the command. "
+    "[CWE-269 - Improper Privilege Management]"
+)
+CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE: Final = (
+    "Claude plugin hook or manifest runs docker push. Pushing an image is "
+    "write authority on a registry. Remove the command. "
+    "[CWE-250 - Execution with Unnecessary Privileges]"
+)
 CLAUDE_PLUGIN_DOCKER_SOCKET_MESSAGE: Final = (
     "Claude plugin hook reaches the host Docker socket. Socket access is host "
     "control, not an image push. Remove the socket bind and keep builds "
@@ -339,6 +351,13 @@ _GITHUB_MERGE_COMMAND = re.compile(
 _GITHUB_RELEASE_COMMAND = re.compile(
     r"\bgh\s+release\s+(?P<verb>create|upload|delete|edit)"
     r"(?=$|[\s;&|()<>])",
+    re.IGNORECASE,
+)
+_KUBECTL_APPLY_COMMAND = re.compile(
+    r"\bkubectl\s+apply(?=$|[\s;&|()<>])", re.IGNORECASE
+)
+_DOCKER_PUSH_COMMAND = re.compile(
+    r"\bdocker(?:\s+image)?\s+push(?=$|[\s;&|()<>])",
     re.IGNORECASE,
 )
 _REPORTING_BUILTINS: Final = frozenset(
@@ -855,6 +874,8 @@ def inspect_claude_plugin_file(
         hits.extend(_github_write_token_hits(content))
         hits.extend(_github_merge_command_hits(content, manifest=manifest))
         hits.extend(_github_release_command_hits(content, manifest=manifest))
+        hits.extend(_kubectl_apply_command_hits(content, manifest=manifest))
+        hits.extend(_docker_push_command_hits(content, manifest=manifest))
         hits.extend(_docker_socket_hits(content))
         hits.extend(_browser_profile_hits(content))
         hits.extend(_credential_store_hits(content))
@@ -1484,6 +1505,100 @@ def _github_write_token_hits(content: str) -> tuple[PluginHit, ...]:
     )
 
 
+def _github_merge_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub merge findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and folded[:2] == ("pr", "merge")
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-merge-command",
+                        line=line,
+                        snippet="gh pr merge",
+                        message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        if match is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-merge-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet="gh pr merge",
+                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
+def _github_release_command_hits(
+    content: str, *, manifest: bool = False
+) -> tuple[PluginHit, ...]:
+    """Return executable GitHub release findings, including typed argv."""
+    for source, first_line in _hosted_command_sources(content, manifest=manifest):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    if manifest:
+        for command, args, line in _manifest_argv_sources(content):
+            folded = tuple(argument.casefold() for argument in args)
+            if (
+                _direct_executable_basename(command) == "gh"
+                and len(folded) >= 2
+                and folded[0] == "release"
+                and folded[1] in {"create", "upload", "delete", "edit"}
+            ):
+                return (
+                    PluginHit(
+                        rule_id="claude-plugin-github-release-command",
+                        line=line,
+                        snippet=f"gh release {folded[1]}",
+                        message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                    ),
+                )
+    for source, first_line in _nested_shell_payload_sources(
+        content, manifest=manifest
+    ):
+        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        if match is not None:
+            verb = match.group("verb").lower()
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-github-release-command",
+                    line=first_line + source[: match.start()].count("\n"),
+                    snippet=f"gh release {verb}",
+                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                ),
+            )
+    return ()
+
 def _unquoted_hash_index(line: str) -> int | None:
     """Return the index of an unquoted ``#`` shell comment, if any.
 
@@ -1970,96 +2085,89 @@ def _nested_shell_payload_sources(
     return tuple(found)
 
 
-def _github_merge_command_hits(
+def _kubectl_apply_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return executable GitHub merge findings, including typed argv."""
+    """Return executable kubectl apply findings, including typed argv."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
         if match is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-github-merge-command",
+                    rule_id="claude-plugin-kubectl-apply-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet="gh pr merge",
-                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
                 ),
             )
     if manifest:
-        for command, args, line in _manifest_argv_sources(content):
-            folded = tuple(argument.casefold() for argument in args)
-            if (
-                _direct_executable_basename(command) == "gh"
-                and folded[:2] == ("pr", "merge")
-            ):
-                return (
-                    PluginHit(
-                        rule_id="claude-plugin-github-merge-command",
-                        line=line,
-                        snippet="gh pr merge",
-                        message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
-                    ),
-                )
+        line = _manifest_argv_command_line(
+            content, executable="kubectl", verb="apply"
+        )
+        if line is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-kubectl-apply-command",
+                    line=line,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
+                ),
+            )
     for source, first_line in _nested_shell_payload_sources(
         content, manifest=manifest
     ):
-        match = _executable_command_match(source, _GITHUB_MERGE_COMMAND)
+        match = _executable_command_match(source, _KUBECTL_APPLY_COMMAND)
         if match is not None:
             return (
                 PluginHit(
-                    rule_id="claude-plugin-github-merge-command",
+                    rule_id="claude-plugin-kubectl-apply-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet="gh pr merge",
-                    message=CLAUDE_PLUGIN_GITHUB_MERGE_COMMAND_MESSAGE,
+                    snippet="kubectl apply",
+                    message=CLAUDE_PLUGIN_KUBECTL_APPLY_COMMAND_MESSAGE,
                 ),
             )
     return ()
 
-def _github_release_command_hits(
+def _docker_push_command_hits(
     content: str, *, manifest: bool = False
 ) -> tuple[PluginHit, ...]:
-    """Return executable GitHub release findings, including typed argv."""
+    """Return executable Docker push findings, including typed argv."""
     for source, first_line in _hosted_command_sources(content, manifest=manifest):
-        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
         if match is not None:
-            verb = match.group("verb").lower()
             return (
                 PluginHit(
-                    rule_id="claude-plugin-github-release-command",
+                    rule_id="claude-plugin-docker-push-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet=f"gh release {verb}",
-                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
                 ),
             )
     if manifest:
         for command, args, line in _manifest_argv_sources(content):
+            if _direct_executable_basename(command) != "docker":
+                continue
             folded = tuple(argument.casefold() for argument in args)
-            if (
-                _direct_executable_basename(command) == "gh"
-                and len(folded) >= 2
-                and folded[0] == "release"
-                and folded[1] in {"create", "upload", "delete", "edit"}
-            ):
+            if folded[:1] == ("push",) or folded[:2] == ("image", "push"):
                 return (
                     PluginHit(
-                        rule_id="claude-plugin-github-release-command",
+                        rule_id="claude-plugin-docker-push-command",
                         line=line,
-                        snippet=f"gh release {folded[1]}",
-                        message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                        snippet="docker push",
+                        message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
                     ),
                 )
     for source, first_line in _nested_shell_payload_sources(
         content, manifest=manifest
     ):
-        match = _executable_command_match(source, _GITHUB_RELEASE_COMMAND)
+        match = _executable_command_match(source, _DOCKER_PUSH_COMMAND)
         if match is not None:
-            verb = match.group("verb").lower()
             return (
                 PluginHit(
-                    rule_id="claude-plugin-github-release-command",
+                    rule_id="claude-plugin-docker-push-command",
                     line=first_line + source[: match.start()].count("\n"),
-                    snippet=f"gh release {verb}",
-                    message=CLAUDE_PLUGIN_GITHUB_RELEASE_COMMAND_MESSAGE,
+                    snippet="docker push",
+                    message=CLAUDE_PLUGIN_DOCKER_PUSH_COMMAND_MESSAGE,
                 ),
             )
     return ()

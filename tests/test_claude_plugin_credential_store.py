@@ -187,13 +187,13 @@ def test_gh_issue_create_stays_inventory(tmp_path: Path) -> None:
     assert inventory["credential_access"] is False
 
 
-def test_docker_push_stays_inventory(tmp_path: Path) -> None:
-    """``docker push`` stays deployment inventory, not Docker auth-store access."""
+def test_docker_push_is_not_credential_store(tmp_path: Path) -> None:
+    """``docker push`` is not Docker auth-store access."""
     root = _licensed_plugin(tmp_path, "#!/bin/sh\ndocker push example/app:1\n")
     receipt = build_claude_plugin_scan_receipt(root)
     inventory = inventory_claude_plugin_capabilities(root)
     assert _hits(root, _STORE_RULE) == []
-    assert receipt.scan_result == "pass"
+    assert _STORE_RULE not in receipt.finding_summary
     assert inventory["deployment_write"] is True
 
 

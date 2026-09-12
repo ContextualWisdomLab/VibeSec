@@ -96,13 +96,16 @@ files being scanned, then applies the union of relevant checks. Examples:
   disagrees with artifact bytes on disk, `claude-plugin-github-merge-command`
   for hook or manifest ``gh pr merge``,
   `claude-plugin-github-release-command` for ``gh release``
-  create/upload/delete/edit, and
+  create/upload/delete/edit,
+  `claude-plugin-kubectl-apply-command` for ``kubectl apply``,
+  `claude-plugin-docker-push-command` for ``docker push``, and
   `claude-plugin-credential-store-access` for host ``~/.netrc``,
   ``~/.aws/credentials``, GitHub CLI hosts, Docker auth, cookie jars, and
   SSH private keys. Chrome/Firefox profile stores stay
   `claude-plugin-browser-profile-access`. Hardcoded PATs stay
-  `claude-plugin-github-write-token`. ``gh issue create``, ``gh pr review``, and
-  ``docker push`` stay inventory.
+  `claude-plugin-github-write-token`. ``gh issue create``, ``gh pr review``,
+  ``kubectl get``, ``docker ps``, ``terraform apply``, and ``helm install``
+  stay inventory.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution

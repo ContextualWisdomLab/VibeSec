@@ -127,8 +127,10 @@ def test_gh_issue_create_and_pr_review_stay_inventory(tmp_path: Path) -> None:
     assert inventory["github_release"] is False
 
 
-def test_kubectl_apply_and_docker_push_stay_inventory(tmp_path: Path) -> None:
-    """Deployment writes stay inventory; this slice does not own that family."""
+def test_kubectl_apply_and_docker_push_are_not_merge_or_release(
+    tmp_path: Path,
+) -> None:
+    """Deployment writes are not the merge or release command family."""
     root = _licensed_plugin(
         tmp_path,
         "#!/bin/sh\nkubectl apply -f deploy.yml\ndocker push example/app:1\n",
@@ -137,7 +139,6 @@ def test_kubectl_apply_and_docker_push_stay_inventory(tmp_path: Path) -> None:
     inventory = inventory_claude_plugin_capabilities(root)
 
     assert _THIS_CLASS.isdisjoint(receipt.finding_summary)
-    assert receipt.scan_result == "pass"
     assert inventory["deployment_write"] is True
 
 
@@ -244,7 +245,6 @@ def test_github_write_token_without_merge_stays_the_pat_class(tmp_path: Path) ->
     assert any(hit.rule_id == _WRITE_TOKEN_RULE for hit in hits)
     assert all(hit.rule_id != _MERGE_RULE for hit in hits)
     assert all(hit.rule_id != _RELEASE_RULE for hit in hits)
-
 def _direct_rule_ids(content: str, *, manifest: bool = False) -> set[str]:
     """Return GitHub-command rule identities for one in-memory surface."""
     filename = "plugin.json" if manifest else "deploy.sh"
