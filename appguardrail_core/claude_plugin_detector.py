@@ -28,11 +28,16 @@ divided by compressed size exceeds the bounded ratio, or nested archives
 beyond a small depth, fail admission without extracting the payload.
 A lockfile-backed package.json without a
 lifecycle download stays inventory. Vendored trees are one scope finding,
-not hook scans. Receipts bind ``policy_provenance`` to the running
-AppGuardrail release and the exact scan-policy bytes, and ``sbom_sha256``
-to a deterministic CycloneDX document of declared dependencies;
-verification fails closed when that digest or scanner version disagrees.
-``scan_result=pass`` is not Noema admission.
+not hook scans. A first-party ``SHA256SUMS``, ``SHA256SUMS.txt``,
+``checksums.sha256``, or ``*.sha256`` next to ``plugin.json`` that names
+the plugin artifact or enumerated files fails closed when the digest
+disagrees with bytes on disk. Comments are ignored. Absence of a
+checksum or Cosign signature is not that class. Receipts bind
+``policy_provenance`` to the running AppGuardrail release and the exact
+scan-policy bytes, and ``sbom_sha256`` to a deterministic CycloneDX
+document of declared dependencies; verification fails closed when that
+digest or scanner version disagrees. ``scan_result=pass`` is not Noema
+admission.
 """
 
 from __future__ import annotations
@@ -126,6 +131,12 @@ CLAUDE_PLUGIN_LICENSE_MISMATCH_MESSAGE: Final = (
     "Claude plugin license evidence names more than one SPDX identifier. "
     "Record the conflict without inventing legal approval. "
     "[CWE-1104 - Use of Unmaintained Third Party Components]"
+)
+CLAUDE_PLUGIN_CHECKSUM_MISMATCH_MESSAGE: Final = (
+    "Claude plugin checksum file lists a SHA-256 digest that does not match "
+    "the bytes on disk. Bind admission to the exact artifact. Absence of a "
+    "checksum or Cosign signature is not this class. "
+    "[CWE-494 - Download of Code Without Integrity Check]"
 )
 CLAUDE_PLUGIN_DYNAMIC_EVAL_MESSAGE: Final = (
     "Claude plugin hook evaluates a string as code. Dynamic eval, exec, "
@@ -265,6 +276,10 @@ CLAUDE_PLUGIN_VENDORED_SCOPE_MESSAGE: Final = (
     "[CWE-829 - Inclusion of Functionality from Untrusted Control Sphere]"
 )
 _MCP_FILENAMES: Final = frozenset({".mcp.json", "mcp.json"})
+_CHECKSUM_FILENAMES: Final = frozenset(
+    {"SHA256SUMS", "SHA256SUMS.txt", "checksums.sha256"}
+)
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 _MAX_PACKAGE_FILES: Final = 10_000
 _MAX_PACKAGE_BYTES: Final = 10 * 1024 * 1024
 _MAX_ARCHIVE_COMPRESSION_RATIO: Final = 100
@@ -825,14 +840,16 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
     Returns:
         Undeclared executable, hidden undeclared executable or config,
         undeclared vendored or generated scope, license absence or SPDX
-        mismatch, size, symlink, archive traversal, decompression bomb,
-        unadmitted-submodule, setuid or world-writable executable modes,
-        and deceptive description findings. Empty when the tree is not a
-        plugin package
-        or every hook is a declared regular file. Inventory presence is
-        not a finding. An empty description is not this class. Git
-        metadata is not a plugin executable surface. ``.mcp.json`` stays
-        the MCP class. Vendored trees are one scope finding.
+        mismatch, first-party checksum mismatch, size, symlink, archive
+        traversal, decompression bomb, unadmitted-submodule, setuid or
+        world-writable executable modes, and deceptive description
+        findings. Empty when the tree is not a plugin package or every
+        hook is a declared regular file. Inventory presence is not a
+        finding. An empty description is not this class. Git metadata is
+        not a plugin executable surface. ``.mcp.json`` stays the MCP
+        class. Vendored trees are one scope finding. A matching checksum
+        file, comments-only checksum file, or missing checksum file is
+        not a finding. Cosign or GPG signatures are not required.
     """
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
@@ -863,6 +880,7 @@ def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
         hits.extend(_license_mismatch_hits(root, payload))
     else:
         hits.extend(_license_mismatch_hits(root, {}))
+    hits.extend(_checksum_mismatch_hits(root))
     _, file_count, scanned_byte_count = _artifact_digest(root)
     if file_count > _MAX_PACKAGE_FILES or scanned_byte_count > _MAX_PACKAGE_BYTES:
         hits.append(
@@ -2655,6 +2673,177 @@ def _license_mismatch_hits(root: Path, payload: dict) -> tuple[PluginHit, ...]:
             file=".claude-plugin",
         ),
     )
+
+
+def _is_first_party_checksum_file(path: Path) -> bool:
+    """Return whether ``path`` is a first-party checksum file.
+
+    Named ``SHA256SUMS``, ``SHA256SUMS.txt``, and ``checksums.sha256``
+    files count anywhere in the tree. A ``*.sha256`` file counts only
+    when it sits next to a regular ``plugin.json``.
+    """
+    if path.name in _CHECKSUM_FILENAMES:
+        return True
+    if not path.name.lower().endswith(".sha256"):
+        return False
+    sibling = path.parent / "plugin.json"
+    try:
+        if not sibling.is_file() or sibling.is_symlink():
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _checksum_file_paths(root: Path) -> tuple[Path, ...]:
+    """Return regular first-party checksum files, never following symlinks."""
+    found: list[Path] = []
+    for path in _walk_entries(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if _is_first_party_checksum_file(path):
+            found.append(path)
+    return tuple(found)
+
+
+def _checksum_listed_name_escapes(name: str) -> bool:
+    """Return whether a checksum path would escape the plugin tree."""
+    if not name or "\x00" in name or _CONCEALED_CHAR.search(name):
+        return True
+    raw = name.replace("\\", "/")
+    if (
+        raw.startswith("/")
+        or name.startswith("\\\\")
+        or raw.startswith("//")
+        or _WINDOWS_DRIVE.match(name)
+        or _WINDOWS_DRIVE.match(raw)
+    ):
+        return True
+    parts = [part for part in raw.split("/") if part not in {"", "."}]
+    return any(part == ".." for part in parts)
+
+
+def _parse_gnu_checksum_line(line: str) -> tuple[str, str] | None:
+    """Return ``(digest, filename)`` from one GNU ``sha256sum`` row."""
+    if len(line) < 66:
+        return None
+    digest = line[:64]
+    if _SHA256_HEX.match(digest) is None:
+        return None
+    separator = line[64:66]
+    if separator in {"  ", " *"}:
+        name = line[66:].strip().strip("'\"")
+    elif line[64] == "\t":
+        name = line[65:].strip().strip("'\"")
+    else:
+        return None
+    if not name:
+        return None
+    return digest.lower(), name
+
+
+def _parse_checksum_entries(text: str, checksum_path: Path) -> tuple[tuple[str, str], ...]:
+    """Return digest and listed-name pairs from one checksum file.
+
+    GNU ``sha256sum`` rows bind enumerated files. A ``*.sha256`` file whose
+    entire body is one hex digest binds the sibling without the suffix.
+    Comment and blank lines are ignored. Named ``checksums.sha256`` files
+    are not treated as a lone digest of a ``checksums`` sibling.
+    """
+    stripped = text.strip()
+    if (
+        checksum_path.name not in _CHECKSUM_FILENAMES
+        and checksum_path.name.lower().endswith(".sha256")
+        and _SHA256_HEX.match(stripped) is not None
+    ):
+        sibling = checksum_path.name[: -len(".sha256")]
+        if sibling:
+            return ((stripped.lower(), sibling),)
+        return ()
+    entries: list[tuple[str, str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parsed = _parse_gnu_checksum_line(line)
+        if parsed is None:
+            continue
+        entries.append(parsed)
+    return tuple(entries)
+
+
+def _resolve_checksum_target(
+    root: Path, checksum_path: Path, listed: str
+) -> Path | None:
+    """Return the in-root regular file named by ``listed``, if any.
+
+    Resolution tries the checksum directory and plugin root. A root
+    ``SHA256SUMS`` may also name the plugin artifact as the bare
+    ``plugin.json`` basename. Nested paths never collapse to a basename.
+    Symlinks and escaped paths yield ``None``.
+    """
+    if _checksum_listed_name_escapes(listed):
+        return None
+    raw = listed.replace("\\", "/")
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return None
+    candidates = [
+        checksum_path.parent / raw,
+        root / raw,
+    ]
+    if checksum_path.parent == root and Path(raw).parent == Path("."):
+        candidates.append(root / ".claude-plugin" / Path(raw).name)
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(root_resolved):
+                continue
+            return resolved
+        except OSError:
+            continue
+    return None
+
+
+def _checksum_mismatch_hit(listed: str, checksum_file: str) -> PluginHit:
+    """Return one checksum-mismatch finding with a path-label snippet."""
+    return PluginHit(
+        rule_id="claude-plugin-checksum-mismatch",
+        line=1,
+        snippet=_sanitize_path_snippet(listed),
+        message=CLAUDE_PLUGIN_CHECKSUM_MISMATCH_MESSAGE,
+        file=checksum_file,
+    )
+
+
+def _checksum_mismatch_hits(root: Path) -> tuple[PluginHit, ...]:
+    """Return findings when a first-party checksum disagrees with disk bytes.
+
+    Missing checksum files are not this class. Cosign, GPG, or network
+    signature checks are not performed. Snippets are listed path labels,
+    never digests or secret literals.
+    """
+    hits: list[PluginHit] = []
+    for path in _checksum_file_paths(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            hits.append(_checksum_mismatch_hit(path.name, relative))
+            continue
+        entries = _parse_checksum_entries(text, path)
+        for digest, listed in entries:
+            target = _resolve_checksum_target(root, path, listed)
+            if target is None:
+                hits.append(_checksum_mismatch_hit(listed, relative))
+                continue
+            actual = _sha256(_regular_file_bytes(target))
+            if actual != digest:
+                hits.append(_checksum_mismatch_hit(listed, relative))
+    return tuple(hits)
 
 
 def _empty_identity() -> dict[str, str]:

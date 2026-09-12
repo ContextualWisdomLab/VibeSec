@@ -90,7 +90,9 @@ files being scanned, then applies the union of relevant checks. Examples:
   nested-archive depth, and pre-extraction aggregate byte budget, and fail-closed
   replay of a stale or mismatched scan receipt bound to `policy_provenance`
   for the exact AppGuardrail release and scan-policy bytes, plus
-  `sbom_sha256` of a deterministic CycloneDX 1.5 dependency document.
+  `sbom_sha256` of a deterministic CycloneDX 1.5 dependency document, and
+  `claude-plugin-checksum-mismatch` when a first-party checksum file
+  disagrees with artifact bytes on disk.
 - Mapped, not owned here: GitHub Actions transport-only poll loops (#1087,
   PR #1088) and orphaned workflow registry DAST (#929, PR #966).
 - `tool-execute-parameters-passthrough`: Strix-observed dynamic tool execution
