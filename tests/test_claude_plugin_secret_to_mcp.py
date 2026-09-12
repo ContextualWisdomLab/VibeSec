@@ -102,6 +102,28 @@ def test_mcp_command_named_secret_is_reported() -> None:
     assert any(hit.rule_id == _MCP_SECRET_RULE for hit in hits)
 
 
+def test_mcp_url_named_secret_reference_is_reported() -> None:
+    """A remote MCP URL that expands a named secret fails admission."""
+    payload = _bounded_mcp()
+    payload["mcpServers"]["local"]["url"] = (
+        "https://mcp.example.test/${OPENAI_API_KEY}"
+    )
+    body = json.dumps(payload, indent=2)
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", body)
+    assert any(hit.rule_id == _MCP_SECRET_RULE for hit in hits)
+
+
+def test_mcp_header_named_secret_reference_is_reported() -> None:
+    """A remote MCP header that expands a named secret fails admission."""
+    payload = _bounded_mcp()
+    payload["mcpServers"]["local"]["headers"] = {
+        "Authorization": "Bearer ${GITHUB_TOKEN}"
+    }
+    body = json.dumps(payload, indent=2)
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", body)
+    assert any(hit.rule_id == _MCP_SECRET_RULE for hit in hits)
+
+
 def test_mcp_args_secret_name_documentation_is_not_a_copy() -> None:
     """An argument that only documents a secret name is not secret flow."""
     body = json.dumps(
