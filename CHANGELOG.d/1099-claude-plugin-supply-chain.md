@@ -82,7 +82,8 @@
   copies stay `claude-plugin-secret-to-network`. Hardcoded ``sk-``
   literals stay `claude-plugin-provider-secret`. Reading a secret into
   a local variable is not this class. Snippets omit secret values.
-  Named secrets copied into MCP ``env``, ``args``, or ``command`` fail as
+  Named secrets copied into MCP ``env``, ``args``, ``command``, ``url``, or
+  ``headers`` fail as
   `claude-plugin-secret-to-mcp`. Curl copies stay
   `claude-plugin-secret-to-network`. Prompt and log copies stay
   `claude-plugin-secret-to-prompt`. Snippets are the env name only.
