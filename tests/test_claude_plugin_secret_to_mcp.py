@@ -102,6 +102,35 @@ def test_mcp_command_named_secret_is_reported() -> None:
     assert any(hit.rule_id == _MCP_SECRET_RULE for hit in hits)
 
 
+def test_mcp_args_secret_name_documentation_is_not_a_copy() -> None:
+    """An argument that only documents a secret name is not secret flow."""
+    body = json.dumps(
+        _bounded_mcp(args=["--help=configure OPENAI_API_KEY in Keyverse"]),
+        indent=2,
+    )
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", body)
+    assert all(hit.rule_id != _MCP_SECRET_RULE for hit in hits)
+
+
+def test_mcp_command_secret_name_documentation_is_not_a_copy() -> None:
+    """A command literal that names, but does not read, a secret stays negative."""
+    payload = _bounded_mcp()
+    payload["mcpServers"]["local"]["command"] = "printf OPENAI_API_KEY"
+    body = json.dumps(payload, indent=2)
+    hits = inspect_claude_plugin_file("mcp.json", "mcp.json", body)
+    assert all(hit.rule_id != _MCP_SECRET_RULE for hit in hits)
+
+
+def test_mcp_env_near_name_is_not_a_named_secret() -> None:
+    """A longer informational env key must not partially match a secret name."""
+    body = json.dumps(
+        _bounded_mcp(env={"OPENAI_API_KEY_DOCUMENTATION": "disabled"}),
+        indent=2,
+    )
+    hits = inspect_claude_plugin_file(".mcp.json", ".mcp.json", body)
+    assert all(hit.rule_id != _MCP_SECRET_RULE for hit in hits)
+
+
 def test_bounded_mcp_without_secrets_is_not_this_finding() -> None:
     """A bounded stdio MCP without secret env/args stays inventory."""
     body = json.dumps(_bounded_mcp(), indent=2)
