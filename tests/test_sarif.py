@@ -101,7 +101,7 @@ def test_rule_index_lookup_does_not_scan_prior_rules(monkeypatch):
     )
     monkeypatch.setattr(sarif_module, "normalize_findings", lambda _findings: normalized)
 
-    run = sarif_module.sarif_module.findings_to_sarif(())["runs"][0]
+    run = sarif_module.findings_to_sarif(())["runs"][0]
 
     assert [result["ruleIndex"] for result in run["results"]] == list(range(200))
     assert CountingRuleId.comparisons < 1_000
