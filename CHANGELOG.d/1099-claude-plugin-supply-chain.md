@@ -23,7 +23,9 @@
   verification is not Noema admission. Hardcoded GitHub PAT or app tokens, host Docker
   socket binds, and named secrets copied into curl/wget/fetch fail
   admission as policy findings; `gh issue create` and `docker push` stay
-  inventory evidence. Unsigned `curl`/`wget` executable fetches and
+  inventory evidence. Secret references require a complete environment-variable
+  name, so longer documentation variables do not collide with protected names.
+  Unsigned `curl`/`wget` executable fetches and
   unpinned pip/npm/cargo URL installs fail admission; `package.json`
   `preinstall`/`install`/`postinstall` scripts that download or execute
   an unsigned payload fail closed on the same rules, while a lockfile-only
@@ -90,7 +92,8 @@
   copies stay `claude-plugin-secret-to-network`. Hardcoded ``sk-``
   literals stay `claude-plugin-provider-secret`. Reading a secret into
   a local variable is not this class. Snippets omit secret values.
-  Named secrets copied into MCP ``env``, ``args``, or ``command`` fail as
+  Named secrets copied into MCP ``env``, ``args``, ``command``, ``url``, or
+  ``headers`` fail as
   `claude-plugin-secret-to-mcp`. Curl copies stay
   `claude-plugin-secret-to-network`. Prompt and log copies stay
   `claude-plugin-secret-to-prompt`. Snippets are the env name only.
