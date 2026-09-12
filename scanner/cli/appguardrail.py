@@ -2322,28 +2322,7 @@ def _finding_category(rule_id: str) -> str:
         return "dependency"
     if "jwt-decode" in rule:
         return "authz"
-    if any(
-        token in rule
-        for token in (
-            "secret",
-            "jwt",
-            "password",
-            "database-url",
-            "credential",
-            "api-key",
-            "token",
-            "openai",
-            "aws",
-            "private-key",
-            "anthropic",
-            "github",
-            "slack",
-            "twilio",
-            "sendgrid",
-            "npm",
-            "pypi",
-        )
-    ):
+    if any(token in rule for token in _SENSITIVE_RULE_TOKENS if token not in ("stripe",)):
         return "secrets"
     if "stripe" in rule or "webhook" in rule:
         return "payment"
