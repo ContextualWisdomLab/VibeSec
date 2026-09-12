@@ -145,7 +145,7 @@ _SECRET_TO_NETWORK = re.compile(
     r"(?:curl|wget|fetch)\b[^\n]*\$(?:\{)?(?P<name>"
     r"OPENAI_API_KEY|NVIDIA_NIM_API_KEY(?:_SUB)?|BYTEZ_API_KEY|"
     r"OPENROUTER_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|"
-    r"AWS_SECRET_ACCESS_KEY)(?:\})?",
+    r"AWS_SECRET_ACCESS_KEY)(?![A-Za-z0-9_])(?:\})?",
     re.IGNORECASE,
 )
 _PIPE_TO_INTERPRETER = re.compile(
