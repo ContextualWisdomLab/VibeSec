@@ -31,5 +31,8 @@
   copying those regular expressions. `appguardrail scan-plugin
   --plugin-root <path> [--marketplace-entry <path>] [--receipt-json <path>]`
   scans a materialized plugin tree, emits that same receipt JSON, and exits
-  nonzero unless `scan_result` is pass. `.claude-plugin/` is included in the
-  scan walk.
+  nonzero unless `scan_result` is pass. An external marketplace catalog
+  binds `catalog_repository`, `catalog_commit_sha`, and
+  `marketplace_blob_sha`; a floating catalog commit or a catalog plugin
+  identity that disagrees with the retrieved artifact fails closed.
+  `.claude-plugin/` is included in the scan walk.

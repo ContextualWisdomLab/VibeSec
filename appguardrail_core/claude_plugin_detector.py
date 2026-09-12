@@ -562,6 +562,8 @@ def build_claude_plugin_scan_receipt(
     scanner_version: str = _SCANNER_VERSION,
     scan_started_at: str = "",
     scan_completed_at: str = "",
+    catalog_payload: object | None = None,
+    catalog_bytes: bytes | None = None,
 ) -> PluginScanReceipt:
     """Return a deterministic admission receipt for one plugin artifact.
 
@@ -570,18 +572,30 @@ def build_claude_plugin_scan_receipt(
         scanner_version: Scanner release identity recorded on the receipt.
         scan_started_at: Optional caller-supplied start timestamp.
         scan_completed_at: Optional caller-supplied completion timestamp.
+        catalog_payload: Optional parsed marketplace catalog document.
+        catalog_bytes: Optional exact catalog file bytes.
 
     Returns:
         Receipt whose identity excludes wall-clock fields. ``scan_result`` is
         ``pass`` only when ``.claude-plugin/`` exists and no policy findings
         remain. Secret literals never appear on the receipt.
     """
-    hits = _collect_plugin_hits(root)
+    hits = list(_collect_plugin_hits(root))
+    catalog, catalog_is_valid = _receipt_catalog_identity(
+        root,
+        catalog_payload,
+        catalog_bytes,
+    )
+    if not catalog_is_valid:
+        hits.append(_invalid_catalog_hit())
+    hits.extend(_catalog_bind_hits(root, catalog))
     finding_summary = tuple(sorted({hit.rule_id for hit in hits}))
     identity = _plugin_identity(root)
     artifact_sha256, file_count, scanned_byte_count = _artifact_digest(root)
     marketplace_path = root / ".claude-plugin" / "marketplace.json"
-    marketplace_bytes = _regular_file_bytes(marketplace_path)
+    marketplace_bytes = (
+        catalog_bytes if catalog_bytes is not None else _regular_file_bytes(marketplace_path)
+    )
     marketplace_blob_sha = _sha256(marketplace_bytes) if marketplace_bytes else ""
     marketplace_entry_sha256 = _sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
@@ -607,8 +621,8 @@ def build_claude_plugin_scan_receipt(
         "scanner_name": _SCANNER_NAME,
         "scanner_version": scanner_version,
         "scanner_policy_sha256": policy_sha256,
-        "catalog_repository": "",
-        "catalog_commit_sha": "",
+        "catalog_repository": catalog["catalog_repository"],
+        "catalog_commit_sha": catalog["catalog_commit_sha"],
         "marketplace_blob_sha": marketplace_blob_sha,
         "marketplace_entry_sha256": marketplace_entry_sha256,
         "plugin_name": identity["plugin_name"],
@@ -683,6 +697,8 @@ def verify_plugin_scan_receipt(
     root: Path,
     *,
     expected_policy_sha256: str | None = None,
+    catalog_payload: object | None = None,
+    catalog_bytes: bytes | None = None,
 ) -> PluginReceiptVerification:
     """Fail closed unless the receipt still binds the current artifact and policy.
 
@@ -691,6 +707,8 @@ def verify_plugin_scan_receipt(
         root: Materialized tree being admitted.
         expected_policy_sha256: Caller-pinned policy digest. When omitted,
             the current scanner policy bytes are required.
+        catalog_payload: Catalog document used when the receipt was issued.
+        catalog_bytes: Exact catalog bytes used when the receipt was issued.
 
     Returns:
         Structured mismatch field names. Empty mismatches mean the receipt
@@ -698,7 +716,11 @@ def verify_plugin_scan_receipt(
         ``scan_result=pass`` is not Noema admission. Reasons never include
         secret literals or raw bidi characters.
     """
-    live = build_claude_plugin_scan_receipt(root)
+    live = build_claude_plugin_scan_receipt(
+        root,
+        catalog_payload=catalog_payload,
+        catalog_bytes=catalog_bytes,
+    )
     current_policy_sha256 = _sha256(Path(__file__).read_bytes())
     expected = (
         current_policy_sha256
@@ -1179,6 +1201,251 @@ def _empty_identity() -> dict[str, str]:
         "source_commit_sha": "",
         "source_path": "",
     }
+
+
+def _empty_catalog_identity() -> dict[str, str]:
+    """Return blank catalog and plugin identity fields."""
+    return {
+        "catalog_repository": "",
+        "catalog_commit_sha": "",
+        **_empty_identity(),
+    }
+
+
+class _MarketplaceCatalogError(ValueError):
+    """Raised when a marketplace catalog cannot bind one plugin identity."""
+
+
+def _normalize_marketplace_entry(
+    entry: object,
+    *,
+    plugin_root: object | None = None,
+) -> dict[str, object]:
+    """Return one validated entry with URL/SHA source aliases normalized."""
+    if not isinstance(entry, dict):
+        raise _MarketplaceCatalogError("invalid plugin entry")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise _MarketplaceCatalogError("invalid plugin name")
+    version = entry.get("version")
+    if version is not None and not isinstance(version, str):
+        raise _MarketplaceCatalogError("invalid plugin version")
+    source = entry.get("source")
+    if isinstance(source, str):
+        normalized_path = source.replace("\\", "/")
+        if not normalized_path.startswith("./"):
+            normalized_root = (
+                plugin_root.replace("\\", "/")
+                if isinstance(plugin_root, str)
+                else ""
+            )
+            root_parts = normalized_root[2:].split("/")
+            if (
+                not normalized_path
+                or normalized_path in {".", ".."}
+                or "/" in normalized_path
+                or _CONCEALED_CHAR.search(normalized_path)
+                or (
+                    normalized_root != "."
+                    and (
+                        not normalized_root.startswith("./")
+                        or not root_parts
+                        or any(part in {"", ".", ".."} for part in root_parts)
+                    )
+                )
+            ):
+                raise _MarketplaceCatalogError("invalid relative plugin source")
+            normalized_path = (
+                f"./{normalized_path}"
+                if normalized_root == "."
+                else f"{normalized_root}/{normalized_path}"
+            )
+        path_parts = normalized_path[2:].split("/")
+        if (
+            not normalized_path.startswith("./")
+            or not path_parts
+            or any(part in {"", ".", ".."} for part in path_parts)
+            or _CONCEALED_CHAR.search(normalized_path)
+        ):
+            raise _MarketplaceCatalogError("invalid relative plugin source")
+        normalized = dict(entry)
+        normalized["source"] = {"path": normalized_path}
+        return normalized
+    if not isinstance(source, dict):
+        raise _MarketplaceCatalogError("invalid plugin source")
+    normalized_source = dict(source)
+    repository = source.get("repo")
+    url = source.get("url")
+    if repository is None:
+        if not isinstance(url, str) or not url:
+            raise _MarketplaceCatalogError("invalid source repository")
+        normalized_source["repo"] = url
+    elif not isinstance(repository, str) or not repository:
+        raise _MarketplaceCatalogError("invalid source repository")
+    elif url is not None and (not isinstance(url, str) or not url):
+        raise _MarketplaceCatalogError("invalid source URL")
+    sha = source.get("sha")
+    ref = source.get("ref")
+    if sha is not None:
+        if not isinstance(sha, str) or not sha:
+            raise _MarketplaceCatalogError("invalid source SHA")
+        normalized_source["ref"] = sha
+    elif not isinstance(ref, str) or not ref:
+        raise _MarketplaceCatalogError("invalid source ref")
+    path_value = source.get("path")
+    if path_value is not None and not isinstance(path_value, str):
+        raise _MarketplaceCatalogError("invalid source path")
+    normalized = dict(entry)
+    normalized["source"] = normalized_source
+    return normalized
+
+
+def _select_marketplace_entry(
+    payload: object | None,
+    root: Path,
+) -> dict[str, object]:
+    """Select exactly one valid catalog entry for the materialized plugin."""
+    if not isinstance(payload, dict):
+        raise _MarketplaceCatalogError("invalid catalog document")
+    plugin_name = _plugin_identity(root)["plugin_name"]
+    if not plugin_name:
+        raise _MarketplaceCatalogError("materialized plugin identity is missing")
+    metadata = payload.get("metadata")
+    plugin_root = metadata.get("pluginRoot") if isinstance(metadata, dict) else None
+    plugins = payload.get("plugins")
+    if plugins is None:
+        selected = _normalize_marketplace_entry(payload, plugin_root=plugin_root)
+        if selected["name"] != plugin_name:
+            raise _MarketplaceCatalogError("catalog entry does not match plugin")
+        return selected
+    if not isinstance(plugins, list):
+        raise _MarketplaceCatalogError("invalid plugins collection")
+    matches: list[dict[str, object]] = []
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            raise _MarketplaceCatalogError("invalid plugin entry")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise _MarketplaceCatalogError("invalid plugin name")
+        version = entry.get("version")
+        if version is not None and not isinstance(version, str):
+            raise _MarketplaceCatalogError("invalid plugin version")
+        if name == plugin_name:
+            matches.append(entry)
+    if len(matches) != 1:
+        raise _MarketplaceCatalogError("catalog entry selection is ambiguous")
+    normalized_match = _normalize_marketplace_entry(
+        matches[0], plugin_root=plugin_root
+    )
+    selected = dict(payload)
+    selected["plugins"] = [normalized_match]
+    return selected
+
+
+def _json_documents_match(left: object, right: object) -> bool:
+    """Return whether two parsed JSON values have the same canonical value."""
+    try:
+        return json.dumps(
+            left,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ) == json.dumps(
+            right,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _receipt_catalog_identity(
+    root: Path,
+    catalog_payload: object | None,
+    catalog_bytes: bytes | None,
+) -> tuple[dict[str, str], bool]:
+    """Derive catalog identity from authoritative bytes and report validity."""
+    payload = catalog_payload
+    valid = True
+    if catalog_bytes is not None:
+        try:
+            parsed = _load_manifest_json(catalog_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember):
+            return _empty_catalog_identity(), False
+        if catalog_payload is not None and not _json_documents_match(
+            catalog_payload, parsed
+        ):
+            valid = False
+        payload = parsed
+    if payload is None:
+        return _empty_catalog_identity(), valid
+    try:
+        selected = _select_marketplace_entry(payload, root)
+    except _MarketplaceCatalogError:
+        return _empty_catalog_identity(), False
+    return _catalog_identity(selected), valid
+
+
+def _invalid_catalog_hit() -> PluginHit:
+    """Return a bounded fail-closed finding for an invalid catalog binding."""
+    return PluginHit(
+        rule_id="claude-plugin-source-mismatch",
+        line=1,
+        snippet="catalog_identity",
+        message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+        file="marketplace.json",
+    )
+
+
+def _catalog_identity(payload: object | None) -> dict[str, str]:
+    """Return catalog repository/SHA plus first plugin identity from a catalog."""
+    identity = _empty_catalog_identity()
+    if not isinstance(payload, dict):
+        return identity
+    repo = payload.get("repository") or payload.get("catalog_repository")
+    sha = (
+        payload.get("commit")
+        or payload.get("catalog_commit_sha")
+        or payload.get("sha")
+    )
+    identity.update(_identity_from_payload(payload))
+    if isinstance(repo, str):
+        identity["catalog_repository"] = repo
+    if isinstance(sha, str):
+        identity["catalog_commit_sha"] = sha
+    return identity
+
+
+def _catalog_bind_hits(root: Path, catalog: dict[str, str]) -> tuple[PluginHit, ...]:
+    """Return findings when an external catalog disagrees with the artifact."""
+    hits: list[PluginHit] = []
+    catalog_sha = catalog.get("catalog_commit_sha") or ""
+    if catalog_sha and not _FULL_SHA.fullmatch(catalog_sha):
+        hits.append(
+            PluginHit(
+                rule_id="claude-plugin-floating-git-ref",
+                line=1,
+                snippet=catalog_sha[:120],
+                message=CLAUDE_PLUGIN_FLOATING_REF_MESSAGE,
+                file="marketplace.json",
+            )
+        )
+    plugin = _plugin_identity(root)
+    for field in ("plugin_name", "source_repository", "source_commit_sha"):
+        left, right = catalog.get(field) or "", plugin.get(field) or ""
+        if left and right and left != right:
+            hits.append(
+                PluginHit(
+                    rule_id="claude-plugin-source-mismatch",
+                    line=1,
+                    snippet=field,
+                    message=CLAUDE_PLUGIN_SOURCE_MISMATCH_MESSAGE,
+                    file="marketplace.json",
+                )
+            )
+            break
+    return tuple(hits)
 
 
 def _identity_from_payload(payload: object) -> dict[str, str]:

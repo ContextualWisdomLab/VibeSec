@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import TextIO
 
 from appguardrail_core.claude_plugin_detector import (
+    _DuplicateJsonMember,
+    _MarketplaceCatalogError,
+    _load_manifest_json,
+    _select_marketplace_entry as _select_catalog_entry,
     build_claude_plugin_scan_receipt,
     verify_plugin_scan_receipt,
 )
@@ -23,6 +27,7 @@ _ERROR_PLUGIN_ROOT = "plugin root is missing or not a directory"
 _ERROR_MARKETPLACE = "marketplace entry is missing or not a file"
 _ERROR_MARKETPLACE_SIZE = "marketplace entry exceeds the bounded size"
 _ERROR_MARKETPLACE_JSON = "marketplace entry is not valid JSON"
+_ERROR_MARKETPLACE_IDENTITY = "marketplace catalog does not contain one matching plugin entry"
 _ERROR_RECEIPT_WRITE = "cannot write receipt"
 _ERROR_RECEIPT_STALE = "receipt does not match the scanned artifact"
 
@@ -75,12 +80,30 @@ def scan_plugin_artifact(
     if not str(plugin_root) or plugin_root.is_symlink() or not plugin_root.is_dir():
         print(_ERROR_PLUGIN_ROOT, file=err)
         return 1
+    catalog_payload: object | None = None
+    catalog_bytes: bytes | None = None
     if marketplace_entry is not None:
-        status = _validate_marketplace_entry(marketplace_entry, err)
+        status, catalog_payload, catalog_bytes = _load_marketplace_catalog(
+            marketplace_entry, err
+        )
         if status != 0:
             return status
-    receipt = build_claude_plugin_scan_receipt(plugin_root)
-    verification = verify_plugin_scan_receipt(receipt, plugin_root)
+        status, _ = _select_marketplace_entry(
+            catalog_payload, plugin_root, err
+        )
+        if status != 0:
+            return status
+    receipt = build_claude_plugin_scan_receipt(
+        plugin_root,
+        catalog_payload=catalog_payload,
+        catalog_bytes=catalog_bytes,
+    )
+    verification = verify_plugin_scan_receipt(
+        receipt,
+        plugin_root,
+        catalog_payload=catalog_payload,
+        catalog_bytes=catalog_bytes,
+    )
     if not verification.matches:
         print(_ERROR_RECEIPT_STALE, file=err)
         return 1
@@ -93,28 +116,45 @@ def scan_plugin_artifact(
     return 0 if receipt.scan_result == "pass" else 1
 
 
-def _validate_marketplace_entry(path: Path, err: TextIO) -> int:
-    """Fail closed unless ``path`` is a bounded regular JSON catalog file."""
+def _load_marketplace_catalog(
+    path: Path, err: TextIO
+) -> tuple[int, object | None, bytes | None]:
+    """Return parsed catalog bytes or a fail-closed status."""
     if path.is_symlink() or not path.is_file():
         print(_ERROR_MARKETPLACE, file=err)
-        return 1
+        return 1, None, None
     try:
-        data = path.read_bytes()
+        with path.open("rb") as stream:
+            data = stream.read(MAX_MARKETPLACE_BYTES + 1)
     except OSError:
         print(_ERROR_MARKETPLACE, file=err)
-        return 1
+        return 1, None, None
     if len(data) > MAX_MARKETPLACE_BYTES:
         print(_ERROR_MARKETPLACE_SIZE, file=err)
-        return 1
+        return 1, None, None
     try:
-        payload = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = _load_manifest_json(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember):
         print(_ERROR_MARKETPLACE_JSON, file=err)
-        return 1
-    if not isinstance(payload, (dict, list)):
+        return 1, None, None
+    if not isinstance(payload, dict):
         print(_ERROR_MARKETPLACE_JSON, file=err)
-        return 1
-    return 0
+        return 1, None, None
+    return 0, payload, data
+
+
+def _select_marketplace_entry(
+    payload: object | None,
+    plugin_root: Path,
+    err: TextIO,
+) -> tuple[int, object | None]:
+    """Select exactly one canonical catalog entry for the materialized plugin."""
+    try:
+        selected = _select_catalog_entry(payload, plugin_root)
+    except _MarketplaceCatalogError:
+        print(_ERROR_MARKETPLACE_IDENTITY, file=err)
+        return 1, None
+    return 0, selected
 
 
 def _write_receipt(path: Path, payload: str, err: TextIO) -> int:
