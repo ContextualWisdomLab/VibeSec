@@ -7,8 +7,8 @@ package URL install, dynamic eval/exec, undeclared hook, hidden undeclared
 executable or config surface, archive path
 escape, unadmitted nested submodule, hardcoded GitHub write token, Docker
 socket bind, host browser-profile store, secret copied into a network
-request, a non-standard JSON constant, a description that denies inventoried
-write, network, GitHub
+request, a non-standard JSON constant, malformed UTF-8 JSON bytes, a
+description that denies inventoried write, network, GitHub
 write, credential, remote MCP, or shell capabilities, or a released
 skill-supply-chain finding on a plugin skill/agent surface is a policy
 finding. Capability inventory is evidence,
@@ -74,6 +74,11 @@ CLAUDE_PLUGIN_NONSTANDARD_JSON_MESSAGE: Final = (
     "Claude plugin manifest contains a non-standard JSON constant. NaN, "
     "Infinity, and -Infinity are not JSON numbers and must fail admission. "
     "[CWE-20 - Improper Input Validation]"
+)
+CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE: Final = (
+    "Claude plugin manifest is not valid UTF-8. Truncated multibyte "
+    "sequences, invalid continuation bytes, and lone surrogates must fail "
+    "admission. [CWE-20 - Improper Input Validation]"
 )
 CLAUDE_PLUGIN_UNBOUNDED_MCP_MESSAGE: Final = (
     "Claude plugin starts a remote or stdio MCP server without a bounded "
@@ -555,6 +560,74 @@ def inspect_claude_plugin_file(
         hits.extend(_browser_profile_hits(content))
         hits.extend(_secret_to_network_hits(content))
     return tuple(hits)
+
+
+def inspect_claude_plugin_bytes(
+    filename: str,
+    relative_path: str,
+    payload: bytes,
+) -> tuple[PluginHit, ...]:
+    """Inspect one file's exact bytes for Claude plugin supply-chain findings.
+
+    Marketplace, plugin, and MCP JSON that is not valid UTF-8 fails closed
+    as ``claude-plugin-malformed-utf8``. Snippets are short labels and never
+    include the raw invalid bytes. Other surfaces decode when possible;
+    invalid UTF-8 on those surfaces is not this class.
+
+    Args:
+        filename: Basename of the file being scanned.
+        relative_path: Repository-relative display path.
+        payload: Exact file bytes.
+
+    Returns:
+        Zero or more hits. Unrelated files return an empty tuple.
+    """
+    posix = relative_path.replace("\\", "/")
+    if _is_manifest(filename, posix):
+        label = _malformed_utf8_label(payload)
+        if label is not None:
+            return (
+                PluginHit(
+                    rule_id="claude-plugin-malformed-utf8",
+                    line=1,
+                    snippet=label,
+                    message=CLAUDE_PLUGIN_MALFORMED_UTF8_MESSAGE,
+                ),
+            )
+        content = payload.decode("utf-8")
+    else:
+        try:
+            content = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            content = ""
+    return inspect_claude_plugin_file(filename, relative_path, content)
+
+
+def _malformed_utf8_label(payload: bytes) -> str | None:
+    """Return a short invalid-UTF-8 label, or ``None`` when bytes are valid UTF-8.
+
+    Args:
+        payload: Exact file bytes.
+
+    Returns:
+        ``truncated-utf8``, ``invalid-continuation``, ``lone-surrogate``, or
+        ``invalid-utf8`` when the bytes are not well-formed UTF-8. Valid UTF-8
+        including CJK returns ``None``.
+    """
+    try:
+        payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        try:
+            payload.decode("utf-8", "surrogatepass")
+        except UnicodeDecodeError:
+            reason = exc.reason
+            if "unexpected end of data" in reason:
+                return "truncated-utf8"
+            if "invalid continuation" in reason:
+                return "invalid-continuation"
+            return "invalid-utf8"
+        return "lone-surrogate"
+    return None
 
 
 def scan_claude_plugin_package(root: Path) -> tuple[PluginHit, ...]:
@@ -2129,11 +2202,13 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
         mcp_path = root / mcp_name
         if mcp_path.is_symlink() or not mcp_path.is_file():
             continue
-        try:
-            content = mcp_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            content = ""
-        hits.extend(inspect_claude_plugin_file(mcp_path.name, mcp_name, content))
+        hits.extend(
+            inspect_claude_plugin_bytes(
+                mcp_path.name,
+                mcp_name,
+                _regular_file_bytes(mcp_path),
+            )
+        )
     plugin_dir = root / ".claude-plugin"
     if not plugin_dir.is_dir() or plugin_dir.is_symlink():
         return tuple(hits)
@@ -2141,11 +2216,13 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
         if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            content = ""
-        hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+        hits.extend(
+            inspect_claude_plugin_bytes(
+                path.name,
+                relative,
+                _regular_file_bytes(path),
+            )
+        )
     for directory_name in _HOOK_DIRS:
         directory = root / directory_name
         if not directory.is_dir() or directory.is_symlink():
@@ -2154,11 +2231,13 @@ def _collect_plugin_hits(root: Path) -> tuple[PluginHit, ...]:
             if path.is_symlink() or not path.is_file():
                 continue
             relative = path.relative_to(root).as_posix()
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                content = ""
-            hits.extend(inspect_claude_plugin_file(path.name, relative, content))
+            hits.extend(
+                inspect_claude_plugin_bytes(
+                    path.name,
+                    relative,
+                    _regular_file_bytes(path),
+                )
+            )
     hits.extend(_package_lifecycle_file_hits(root))
     hits.extend(_skill_supply_chain_hits(root))
     return tuple(hits)

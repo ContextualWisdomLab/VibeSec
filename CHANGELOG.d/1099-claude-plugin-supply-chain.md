@@ -61,4 +61,7 @@
   Manifest ``NaN``, ``Infinity``, and ``-Infinity`` fail as
   `claude-plugin-nonstandard-json-constant`. Duplicate object members stay
   `claude-plugin-duplicate-json-member`. A finite JSON number is not that
-  class.
+  class. Marketplace, plugin, and MCP JSON bytes that are not valid UTF-8
+  fail as `claude-plugin-malformed-utf8`. Valid CJK stays admitted. Bidi
+  and control concealment stay `claude-plugin-concealed-identity`.
+  Snippets are short labels and omit raw invalid bytes.
