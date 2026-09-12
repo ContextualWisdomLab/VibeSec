@@ -26,6 +26,7 @@ _SECURITY_SEVERITY = {"CRITICAL": "9.0", "HIGH": "7.0", "WARNING": "4.0", "INFO"
 
 
 def _tags(finding: dict[str, Any]) -> list[str]:
+    """Preserve category, CWE, and OWASP evidence as SARIF rule tags."""
     tags = ["security", str(finding.get("category") or "misconfig")]
     tags.extend(str(t) for t in finding.get("cwe") or ())
     tags.extend(str(t) for t in finding.get("owasp") or ())
