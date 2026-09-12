@@ -281,10 +281,7 @@ function render(){
 function openDetail(f){
   lastFocus = document.activeElement;
   const s = String(f.severity||'INFO').toUpperCase();
-  const refs = (f.references||[]).map((r, i) => {
-    const extId = `ext-link-${i}`;
-    return `<a href="${esc(safeUrl(r))}" target="_blank" rel="noopener" aria-describedby="${extId}">${esc(r)} <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;vertical-align:-2px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg><span id="${extId}" class="sr-only">(opens in a new tab)</span></a>`;
-  }).join('<br>');
+  const refs = (f.references||[]).map(r=>`<a href="${esc(safeUrl(r))}" target="_blank" rel="noopener">${esc(r)}</a>`).join('<br>');
   const owasp = (f.owasp||[]).join(', ');
   const cwe = (f.cwe||[]).join(', ');
   const d = document.getElementById('detail');
