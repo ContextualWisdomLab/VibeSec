@@ -643,6 +643,8 @@ def make_control_plane_server(host: str, port: int, db_path: str):
                 if body is None or not isinstance(body, dict):
                     return self._json(400, {"error": "invalid JSON body"})
                 webhook_url = body.get("url")
+                if webhook_url is not None and not _is_safe_url(webhook_url):
+                    return self._json(400, {"error": "invalid webhook url"})
                 try:
                     set_webhook(conn, org, webhook_url)
                 except ValueError as exc:
