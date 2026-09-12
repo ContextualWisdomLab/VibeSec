@@ -23,4 +23,10 @@
   Unsigned `curl`/`wget` executable fetches and
   unpinned pip/npm/cargo URL installs fail admission; a `package.json`
   plus lockfile without a postinstall download stays `package_install`
-  inventory. `.claude-plugin/` is included in the scan walk.
+  inventory. Plugin skill/agent surfaces reuse released #1036 rule
+  identities (`skill-name-homoglyph-confusable`,
+  `skill-manifest-prompt-injection-payload`,
+  `skill-doc-exfiltration-endpoint-directive`,
+  `skill-placeholder-template-unresolved`) on the admission receipt without
+  copying those regular expressions. `.claude-plugin/` is included in the
+  scan walk.

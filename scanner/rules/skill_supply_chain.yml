@@ -1,0 +1,70 @@
+rules:
+  # Skill-supply-chain detectors (G-005 in docs/product-technical-gap-baseline.md):
+  # turn the malicious shared-skill threat inventory rows (THREAT_MODEL.md,
+  # #1032) into executable detection obligations. These target skill manifest
+  # and agent-skill documentation files consumed by coding agents.
+
+  - id: skill-name-homoglyph-confusable
+    patterns:
+      - pattern-regex: '(?im)(?:(?:(?:^[ \t]*(?:["''`](?:name|skill)["''`]|(?:name|skill)))|(?:[,{][ \t]*["''`](?:name|skill)["''`]))[ \t]*[:=][ \t]*["'']?(?=[A-Za-z0-9_.а-яіїєґёјѕ-]*[A-Za-z])(?=[A-Za-z0-9_.а-яіїєґёјѕ-]*[а-яіїєґёјѕ])[A-Za-z0-9_.а-яіїєґёјѕ-]+|^[ \t]*\{[ \t]*(?:(?:[A-Za-z_][A-Za-z0-9_-]*|["''][^"''\n{}:,]+["''])[ \t]*:[ \t]*(?:"[^"\n]*"|''[^''\n]*''|\{[^{}\n]*\}|\[[^\[\]\n]*\]|[^,{}\[\]\n]+)[ \t]*,[ \t]*)*(?:name|skill)[ \t]*:[ \t]*["'']?(?=[A-Za-z0-9_.а-яіїєґёјѕ-]*[A-Za-z])(?=[A-Za-z0-9_.а-яіїєґёјѕ-]*[а-яіїєґёјѕ])[A-Za-z0-9_.а-яіїєґёјѕ-]+["'']?(?:[ \t]*,[ \t]*(?:[A-Za-z_][A-Za-z0-9_-]*|["''][^"''\n{}:,]+["''])[ \t]*:[ \t]*(?:"[^"\n]*"|''[^''\n]*''|\{[^{}\n]*\}|\[[^\[\]\n]*\]|[^,{}\[\]\n]+))*[ \t]*\}[ \t]*(?:#.*)?$)'
+    message: |
+      Skill identifier mixes Cyrillic homoglyph characters (а/е/о/р/с/х/і/ј/ѕ)
+      with Latin letters. Homoglyph names masquerade as trusted skills
+      (e.g. "reаd_data" with Cyrillic а) to bypass deny lists and hijack
+      agent invocation. Rename using ASCII-only identifiers and add the
+      poisoned name to the skill deny list.
+    severity: CRITICAL
+    languages: [generic]
+    paths:
+      include:
+        - "**/SKILL.md"
+        - "**/skill.json"
+        - "**/*.skill.md"
+
+  - id: skill-manifest-prompt-injection-payload
+    patterns:
+      - pattern-regex: '(?i)(SYSTEM|DEVELOPER)\s*:\s*(ignore|disregard|forget)[^\n]{0,80}(safety|security|previous instructions|rules)|ignore (all |your )?(safety|security) rules'
+    message: |
+      Skill documentation embeds a prompt-injection payload ordering safety-rule
+      bypass. Text in skill manifests is untrusted data, never instructions.
+      Remove the payload, treat catalog content as data only, and deny-list the
+      source repository.
+    severity: CRITICAL
+    languages: [generic]
+    paths:
+      include:
+        - "**/SKILL.md"
+        - "**/skill.json"
+        - "**/*.skill.md"
+        - "**/agent.md"
+
+  - id: skill-doc-exfiltration-endpoint-directive
+    patterns:
+      - pattern-regex: '(?i)(send|post|exfiltrate|upload)[^\n]{0,60}(all )?(file contents|secrets|credentials|tokens)[^\n]{0,40}https?://'
+    message: |
+      Skill documentation directs the agent to transmit file contents or
+      credentials to a remote endpoint. This is data-exfiltration wording, not
+      a capability. Remove the directive and audit any skill installed from
+      this source for prior exfiltration.
+    severity: CRITICAL
+    languages: [generic]
+    paths:
+      include:
+        - "**/SKILL.md"
+        - "**/skill.json"
+        - "**/*.skill.md"
+        - "**/agent.md"
+
+  - id: skill-placeholder-template-unresolved
+    patterns:
+      - pattern-regex: '(?im)^name:\s*["'']?\{\{?[A-Za-z][A-Za-z0-9_-]*\}\}?["'']?\s*$'
+    message: |
+      Skill frontmatter still carries an unresolved placeholder name
+      (e.g. "{skill-name}"). Placeholder templates pollute skill discovery and
+      can never resolve to a real capability. Render the template or remove it
+      from the skill root.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include:
+        - "**/SKILL.md"
