@@ -2329,10 +2329,15 @@ def _finding_category(rule_id: str) -> str:
             "jwt",
             "password",
             "database-url",
+            "db-url",
+            "dsn",
             "credential",
             "api-key",
+            "access-key",
             "token",
             "openai",
+            "supabase-service-role",
+            "private-key",
         )
     ):
         return "secrets"
